@@ -92,6 +92,8 @@
 using namespace dealii;
 
 
+const long double pi = 3.141592653589793238462643;
+const double R = 1.2e-2;
 
 // First, we define tensors for solution variables
 // v (velocity), u (displacement), p (pressure).
@@ -729,8 +731,7 @@ BoundaryParabel<dim>::value (const Point<dim>  &p,
   Assert (component < this->n_components,
 	  ExcIndexRange (component, 0, this->n_components));
 
-  const long double pi = 3.141592653589793238462643;
-  
+//   const long double pi = 3.141592653589793238462643;
   // The maximum inflow depends on the configuration
   // for the different test cases:
   // FSI 1: 0.2; 
@@ -744,25 +745,32 @@ BoundaryParabel<dim>::value (const Point<dim>  &p,
   // the total time 2.0 has been reached. 
   // double inflow_velocity = 0.2;
 
-  if (component == 0)   
-    {
-      if (_time < 2.0)
+//   if (component == 0)   
+//     {
+//       if (_time < 2.0)
+// 	{
+// 	  return   ( (p(0) == 0) && (p(1) <= 0.41) ? -1.5 * _inflow_velocity * 
+// 		     (1.0 - std::cos(pi/2.0 * _time))/2.0 * 
+// 		     (4.0/0.1681) * 		     		    
+// 		     (std::pow(p(1), 2) - 0.41 * std::pow(p(1),1)) : 0 );
+// 	}
+//       else 
+// 	{
+// 	  return ( (p(0) == 0) && (p(1) <= 0.41) ? -1.5 * _inflow_velocity * 			
+// 		   (4.0/0.1681) * 		     		    
+// 		   (std::pow(p(1), 2) - 0.41 * std::pow(p(1),1)) : 0 );
+	  
+// 	}
+
+//     }
+ 
+ if (component == 0)   
 	{
-	  return   ( (p(0) == 0) && (p(1) <= 0.41) ? -1.5 * _inflow_velocity * 
-		     (1.0 - std::cos(pi/2.0 * _time))/2.0 * 
-		     (4.0/0.1681) * 		     		    
-		     (std::pow(p(1), 2) - 0.41 * std::pow(p(1),1)) : 0 );
-	}
-      else 
-	{
-	  return ( (p(0) == 0) && (p(1) <= 0.41) ? -1.5 * _inflow_velocity * 			
-		   (4.0/0.1681) * 		     		    
-		   (std::pow(p(1), 2) - 0.41 * std::pow(p(1),1)) : 0 );
+	  return ( (p(0) == 0) && (p(1) <= R) ? _inflow_velocity * 			
+		   (11/9) * (1 - std::pow(p(1)/R,9)) : 0 );
 	  
 	}
 
-    }
- 
   return 0;
 }
 
@@ -833,7 +841,7 @@ class FSI_ALE_Problem
 {
 public:
   
-  FSI_ALE_Problem (const std::string &input_file);
+  FSI_ALE_Problem (const unsigned int &degree);
   ~FSI_ALE_Problem (); 
   void run ();
   
@@ -880,7 +888,7 @@ private:
   // Boundary conditions (bc)
   void set_initial_bc (const double time);
   void set_newton_bc ();
-
+  void inlet_flow (const double t);
   // Linear solver
   void solve ();
 
@@ -892,21 +900,20 @@ private:
 		       const BlockVector<double> solution) const;
 
 
-  // Evaluation of functional values  
-  double compute_point_value (Point<dim> p,
-			      const unsigned int component) const;
+//   // Evaluation of functional values  
+//   double compute_point_value (Point<dim> p,
+// 			      const unsigned int component) const;
   
-  void compute_drag_lift_fsi_fluid_tensor ();
-  void compute_drag_lift_fsi_fluid_tensor_domain ();
-  void compute_drag_lift_fsi_fluid_tensor_domain_structure();
+//   void compute_drag_lift_fsi_fluid_tensor ();
+//   void compute_drag_lift_fsi_fluid_tensor_domain ();
+//   void compute_drag_lift_fsi_fluid_tensor_domain_structure();
 
   void compute_functional_values ();
   void compute_minimal_J();
 
   // Local mesh refinement
-  void refine_mesh();
-
-  Parameters::AllParameters parameters; 
+//   void refine_mesh();
+ 
   const unsigned int   degree;
   
   Triangulation<dim>   triangulation;
@@ -934,7 +941,8 @@ private:
   
   // Structure parameters
   double density_structure; 
-  double lame_coefficient_mu, lame_coefficient_lambda, poisson_ratio_nu;  
+  double lame_mu[3], lame_lambda[3];
+  double poisson_ratio_nu;  
 
   // Other parameters to control the fluid mesh motion 
   double cell_diameter;  
@@ -945,7 +953,12 @@ private:
   double global_drag_lift_value;
   SparseDirectMUMPS A_direct;
 
-  unsigned int fluid_id, solid_id, fixed_id, inlet_id, outlet_id;
+  unsigned int solid_id[3] = { 15,16,17 }; 
+  unsigned int fluid_id = 14, 		   
+			   fixed_id = 20, 
+			   inlet_id = 18, 
+			   outlet_id= 19,
+			   symmetry_id = 21;
   
 };
 
@@ -955,16 +968,15 @@ private:
 // We are going to use the following finite element discretization: 
 // Q_2^c for the fluid, Q_2^c for the solid, P_1^dc for the pressure. 
 template <int dim>
-FSI_ALE_Problem<dim>::FSI_ALE_Problem (const std::string &input_file)
+FSI_ALE_Problem<dim>::FSI_ALE_Problem (const unsigned int &degree)
                 :
-				parameters(input_file),
-                degree (parameters.degree),
-		triangulation (Triangulation<dim>::maximum_smoothing),
+                degree (degree),
+				triangulation (Triangulation<dim>::maximum_smoothing),
                 fe (FE_Q<dim>(degree), dim,  // velocities                  
-		    FE_Q<dim>(degree), dim,  // displacements		    
-		    FE_DGP<dim>(degree-1), 1),   // pressure
+		    		FE_Q<dim>(degree), dim,  // displacements		    
+		    		FE_DGP<dim>(degree-1), 1),   // pressure
                 dof_handler (triangulation),
-		timer (std::cout, TimerOutput::summary, TimerOutput::cpu_times)		
+				timer (std::cout, TimerOutput::summary, TimerOutput::cpu_times)		
 {}
 
 
@@ -983,50 +995,53 @@ template <int dim>
 void FSI_ALE_Problem<dim>::set_runtime_parameters ()
 {
    // Fluid parameters
-  density_fluid = parameters.density_fluid;
+  density_fluid = 1.05e+3;
 
   // FSI 1 & 3: 1.0e+3; FSI 2: 1.0e+4
-  density_structure =  parameters.density_structure; 
-  viscosity = parameters.viscosity;  
+  density_structure =  2.2e+3; 
+  viscosity = 3.45e-3;  
 
   // Structure parameters
   // FSI 1 & 2: 0.5e+6; FSI 3: 2.0e+6
-  lame_coefficient_mu = parameters.lame_coefficient_mu; 
-  poisson_ratio_nu = parameters.poisson_ratio_nu; 
-  
-  lame_coefficient_lambda =  (2 * poisson_ratio_nu * lame_coefficient_mu)/
-    (1.0 - 2 * poisson_ratio_nu);
+  double E[3];
+  E[0] = 2e+6;
+  E[1] = 6e+6;
+  E[2] = 4e+6; 
+
+  poisson_ratio_nu = 0.45; 
+
+  double tmp1 = poisson_ratio_nu/((1+poisson_ratio_nu)*(1-2*poisson_ratio_nu));
+  double tmp2 = 2*(1+poisson_ratio_nu);
+
+  for(int i=0;i<3;++i){
+	  lame_mu[i] = E[i]/tmp2;
+	  lame_lambda[i]= E[i]/tmp1;
+  }
   
   // Force on beam
-  force_structure_x = parameters.force_structure_x; 
-  force_structure_y = parameters.force_structure_y; 
+  force_structure_x = 0; 
+  force_structure_y = 0; 
 
 
   // Diffusion parameters to control the fluid mesh motion
   // The higher these parameters the stiffer the fluid mesh.
-  alpha_u = parameters.alpha_u; 
+  alpha_u = 1e-8; 
 
   // Timestepping schemes
   //BE, CN, CN_shifted
-  time_stepping_scheme = parameters.time_stepping_scheme;
+//   time_stepping_scheme = parameters.time_stepping_scheme;
 
   // Timestep size:
   // FSI 1: 1.0 (quasi-stationary)
   // FSI 2: <= 1.0e-2 (non-stationary)
   // FSI 3: <= 1.0e-3 (non-stationary)
-  timestep = parameters.timestep;
+  timestep = 5e-3;
 
-
-  fluid_id = parameters.fluid_id;
-  solid_id = parameters.solid_id;
-  fixed_id = parameters.fixed_id;
-  inlet_id = parameters.inlet_id;
-  outlet_id = parameters.outlet_id;
   // Maximum number of timesteps:
   // FSI 1: 25 , T= 25   (timestep == 1.0)
   // FSI 2: 1500, T= 15  (timestep == 1.0e-2)
   // FSI 3: 10000, T= 10 (timestep == 1.0e-3)
-  max_no_timesteps = parameters.max_no_timesteps;
+  max_no_timesteps = 800;
   
   // A variable to count the number of time steps
   timestep_number = 0;
@@ -1041,25 +1056,26 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
   // CN_shifted = time-shifted Crank-Nicolson scheme 
   // For further properties of these schemes,
   // we refer to standard literature.
-  if (time_stepping_scheme == "BE")
-    theta = 1.0;
-  else if (time_stepping_scheme == "CN")
-    theta = 0.5;
-  else if (time_stepping_scheme == "CN_shifted")
-    theta = 0.5 + timestep;
-  else 
-    {
-		std::cout << "No such timestepping scheme!" << std::endl;
-		std::cout << "Use Crank-Nicolson as default." << std::endl;
-		theta = 0.5;
-		}
-
+//   if (time_stepping_scheme == "BE")
+//     theta = 1.0;
+//   else if (time_stepping_scheme == "CN")
+//     theta = 0.5;
+//   else if (time_stepping_scheme == "CN_shifted")
+//     theta = 0.5 + timestep;
+//   else 
+//     {
+// 		std::cout << "No such timestepping scheme!" << std::endl;
+// 		std::cout << "Use Crank-Nicolson as default." << std::endl;
+// 		theta = 0.5;
+// 		}
+  theta = 0.5 + timestep;
   // In the following, we read a *.inp grid from a file.
   // The geometry information is based on the 
   // fluid-structure interaction benchmark problems 
   // (Lit. J. Hron, S. Turek, 2006)
   std::string grid_name;
-  grid_name  = parameters.mesh_file; 
+//   grid_name  = parameters.mesh_file; 
+  grid_name = "Khanafer_half.msh";
   std::cout << "\n================================\n"
  	        << "Mesh file: " << grid_name << std::endl;
   GridIn<dim> grid_in;
@@ -1068,15 +1084,16 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
   Assert (dim==2, ExcInternalError());
 //   if( grid_name.find('.inp')!=std::string::npos )
 // 	std::cout << ".inp mesh file, using 'read_ucd' to read mesh..." << std::endl;
-  grid_in.read_ucd (input_file); 
-  
-  Point<dim> p(0.2, 0.2);
-  double radius = 0.05;
-  static const HyperBallBoundary<dim> boundary(p,radius);
-  triangulation.set_boundary (80, boundary);
-  triangulation.set_boundary (81, boundary);
+//   grid_in.read_ucd (input_file); 
+  grid_in.read_msh(input_file);
+
+//   Point<dim> p(0.2, 0.2);
+//   double radius = 0.05;
+//   static const HyperBallBoundary<dim> boundary(p,radius);
+//   triangulation.set_boundary (80, boundary);
+//   triangulation.set_boundary (81, boundary);
     
-  triangulation.refine_global (parameters.no_of_refinements); 
+//   triangulation.refine_global (parameters.no_of_refinements); 
  
   std::cout << "\n==============================" 
 	    << "====================================="  << std::endl;
@@ -1087,7 +1104,6 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
 	    << "Viscosity fluid:      "   <<  viscosity << "\n"
 	    << "alpha_u:              "   <<  alpha_u << "\n"
 	    << "Lame coeff. mu:       "   <<  lame_coefficient_mu << "\n\n"
-		<< "inflow is:            "   <<  parameters.inflow_velocity << "\n"
 		<< "time scheme:          "   <<  time_stepping_scheme << "\n"
 		<< "max timesteps:        "   <<  max_no_timesteps << "\n"
 		<< "length of time step:  "   <<  timestep << "\n"
@@ -1655,8 +1671,20 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 	  // for the fluid equations and step to the computation of the 
 	  // structure terms:
 	} 
-      else if (cell->material_id() == solid_id)
-	{	      
+      else if (cell->material_id() == solid_id[0] || cell->material_id() == solid_id[1] || cell->material_id() == solid_id[2])
+	{	  
+		 if (cell->material_id() == solid_id[0]){
+		 	double lame_coefficient_mu = lame_mu[0];
+			double lame_coefficient_lambda = lame_lambda[0];
+		 }
+		 if (cell->material_id() == solid_id[1]){
+		 	double lame_coefficient_mu = lame_mu[1];
+			double lame_coefficient_lambda = lame_lambda[1];
+		 }
+		if (cell->material_id() == solid_id[2]){
+		 	double lame_coefficient_mu = lame_mu[2];
+			double lame_coefficient_lambda = lame_lambda[2];
+		}
 	  for (unsigned int q=0; q<n_q_points; ++q)
 	    {	      
 	      for (unsigned int k=0; k<dofs_per_cell; ++k)
@@ -2082,8 +2110,20 @@ local_assemble_system_rhs (const typename DoFHandler<dim>::active_cell_iterator 
 	  // the variational formulation for the fluid part and step to
 	  // the assembling process of the structure terms:
 	}   
-      else if (cell->material_id() == solid_id)
+      else if (cell->material_id() == solid_id[0] || cell->material_id() == solid_id[1] || cell->material_id() == solid_id[2])
 	{	  
+		 if (cell->material_id() == solid_id[0]){
+		 	double lame_coefficient_mu = lame_mu[0];
+			double lame_coefficient_lambda = lame_lambda[0];
+		 }
+		 if (cell->material_id() == solid_id[1]){
+		 	double lame_coefficient_mu = lame_mu[1];
+			double lame_coefficient_lambda = lame_lambda[1];
+		 }
+		if (cell->material_id() == solid_id[2]){
+		 	double lame_coefficient_mu = lame_mu[2];
+			double lame_coefficient_lambda = lame_lambda[2];
+		}	  
 	  for (unsigned int q=0; q<n_q_points; ++q)
 	    {		 		 	      
 	      const Tensor<1,dim> v = ALE_Transformations
@@ -2230,6 +2270,38 @@ local_assemble_system_rhs (const typename DoFHandler<dim>::active_cell_iterator 
 }
 
 
+// inlet fow profile
+template <int dim>
+void
+FSI_ALE_Problem<dim>::inlet_flow (const double t)
+{
+//   const long double pi = 3.141592653589793238462643;
+  const double T0 = 1.0;
+  const double qmax = 250;
+  const double a = 2.0/3.0;
+  double qnew = 0;
+  double temp, fi;
+  if ( t <= T0 ) {
+	if ( t <= a ){
+	  fi=3*pi*t-1.4142;
+	  qnew = qmax*(0.251+0.290*(std::cos(fi)+0.97*std::cos(2*fi)+0.47*std::cos(3*fi)+0.14*std::cos(4*fi)));
+	}else{
+	  fi = 3*pi*a-1.4142;
+	  qnew = qmax*(0.251+0.290*(std::cos(fi)+0.97*std::cos(2*fi)+0.47*std::cos(3*fi)+0.14*std::cos(4*fi)));
+	}
+  }else{
+	temp=t;
+	while(temp>T0){ temp=temp-T0; }
+	if(temp<=a){
+	  fi = 3*pi*temp-1.4142;
+	  qnew = qmax*(0.251+0.290*(std::cos(fi)+0.97*std::cos(2*fi)+0.47*std::cos(3*fi)+0.14*std::cos(4*fi)));
+	}else{
+	  fi = 3*pi*a-1.4142;
+	  qnew = qmax*(0.251+0.290*(std::cos(fi)+0.97*std::cos(2*fi)+0.47*std::cos(3*fi)+0.14*std::cos(4*fi)));
+	}	
+  }
+  return 1e-6*qnew/(pi*std::pow(R,2));// u=Q/A, A=pi*r^2, Q:mL/s,
+}
 // Here, we impose boundary conditions
 // for the whole system. The fluid inflow 
 // is prescribed by a parabolic profile. The usual
@@ -2246,60 +2318,50 @@ template <int dim>
 void
 FSI_ALE_Problem<dim>::set_initial_bc (const double time)
 { 
-	double inflow_velocity =parameters.inflow_velocity;
+	double inflow_velocity = inlet_flow (time);
     std::map<unsigned int,double> boundary_values;  
     std::vector<bool> component_mask (dim+dim+1, true);
     // (Scalar) pressure
     component_mask[dim+dim] = false;  
- 
+	// inlet boundary 
     VectorTools::interpolate_boundary_values (dof_handler,
-					      0,
-					      BoundaryParabel<dim>(time, inflow_velocity),
-					      boundary_values,
-					      component_mask);    
+						inlet_id,
+						BoundaryParabel<dim>(time, inflow_velocity),
+						boundary_values,
+						component_mask);    
 
-
+	// symmetry boundary
+	component_mask[0]   = false; // vx
     component_mask[dim] = false; // ux
     VectorTools::interpolate_boundary_values (dof_handler,
-                                              2,
-					      ZeroFunction<dim>(dim+dim+1),  
-                                              boundary_values,
-                                              component_mask);
+						symmetry_id,
+						ZeroFunction<dim>(dim+dim+1),  
+						boundary_values,
+						component_mask);
 
-
-    VectorTools::interpolate_boundary_values (dof_handler,
-                                              3,
-					      ZeroFunction<dim>(dim+dim+1),  
-                                              boundary_values,
-                                              component_mask);
-
-
+	// fixed boundary
+	// vy and uv may not need to be fixed
+	component_mask[0]   = true;  // vx
     component_mask[dim] = true;  // ux 
     VectorTools::interpolate_boundary_values (dof_handler,
-					      80,
-					      ZeroFunction<dim>(dim+dim+1),  
-					      boundary_values,
-					      component_mask);
+						fixed_id,
+						ZeroFunction<dim>(dim+dim+1),  
+						boundary_values,
+						component_mask);
     
-    VectorTools::interpolate_boundary_values (dof_handler,
-					      81,
-					      ZeroFunction<dim>(dim+dim+1),  
-					      boundary_values,
-					      component_mask);
-    
+    // outlet boundary
     component_mask[0] = false;
     component_mask[1] = false;   
-    
     VectorTools::interpolate_boundary_values (dof_handler,
-					      1,
-					      ZeroFunction<dim>(dim+dim+1),  
-					      boundary_values,
-					      component_mask);
+						outlet_id,
+						ZeroFunction<dim>(dim+dim+1),  
+						boundary_values,
+						component_mask);
     
     for (typename std::map<unsigned int, double>::const_iterator
 	   i = boundary_values.begin();
-	 i != boundary_values.end();
-	 ++i)
+	   i != boundary_values.end();
+	   ++i)
       solution(i->first) = i->second;
     
 }
@@ -2316,40 +2378,36 @@ FSI_ALE_Problem<dim>::set_newton_bc ()
     std::vector<bool> component_mask (dim+dim+1, true);
     component_mask[dim+dim] = false;  // p
 
-   
+    // inlet boundary
     VectorTools::interpolate_boundary_values (dof_handler,
-					      0,
-					      ZeroFunction<dim>(dim+dim+1),                                             
-					      constraints,
-					      component_mask); 
+						  inlet_id,
+						  ZeroFunction<dim>(dim+dim+1),                                             
+						  constraints,
+						  component_mask);
+
+	// symmetry boundary
+	component_mask[0]   = false; // vx 
     component_mask[dim] = false; // ux
     VectorTools::interpolate_boundary_values (dof_handler,
-                                              2,
+						  symmetry_id,
 					      ZeroFunction<dim>(dim+dim+1),  
-                                              constraints,
-                                              component_mask);
+						  constraints,
+						  component_mask);
     
+    // fixed boundary
+	component_mask[0]   = true; // vx 
+	component_mask[dim] = true; // ux
     VectorTools::interpolate_boundary_values (dof_handler,
-                                              3,
-					      ZeroFunction<dim>(dim+dim+1),  
-                                              constraints,
-                                              component_mask);
-    component_mask[dim] = true; // ux
-    VectorTools::interpolate_boundary_values (dof_handler,
-                                              80,
-					      ZeroFunction<dim>(dim+dim+1),  
-                                              constraints,
-                                              component_mask);
-    VectorTools::interpolate_boundary_values (dof_handler,
-					      81,
+					      fixed_id,
 					      ZeroFunction<dim>(dim+dim+1),  
 					      constraints,
-					      component_mask);       
+					      component_mask);  
+
+    // outlet boundary
     component_mask[0] = false;
     component_mask[1] = false;
-    
     VectorTools::interpolate_boundary_values (dof_handler,
-					      1,
+					      outlet_id,
 					      ZeroFunction<dim>(dim+dim+1),  
 					      constraints,
 					      component_mask);
@@ -2533,20 +2591,20 @@ FSI_ALE_Problem<dim>::output_results (const unsigned int time_step,
 // With help of this function, we extract 
 // point values for a certain component from our
 // discrete solution. We use it to gain the 
-// displacements of the structure in the x- and y-directions.
-template <int dim>
-double FSI_ALE_Problem<dim>::compute_point_value (Point<dim> p, 
-					       const unsigned int component) const  
-{
+// // displacements of the structure in the x- and y-directions.
+// template <int dim>
+// double FSI_ALE_Problem<dim>::compute_point_value (Point<dim> p, 
+// 					       const unsigned int component) const  
+// {
  
-  Vector<double> tmp_vector(dim+dim+1);
-  VectorTools::point_value (dof_handler, 
-			    solution, 
-			    p, 
-			    tmp_vector);
+//   Vector<double> tmp_vector(dim+dim+1);
+//   VectorTools::point_value (dof_handler, 
+// 			    solution, 
+// 			    p, 
+// 			    tmp_vector);
   
-  return tmp_vector(component);
-}
+//   return tmp_vector(component);
+// }
 
 // Now, we arrive at the function that is responsible 
 // to compute the line integrals for the drag and the lift. Note, that 
@@ -2554,509 +2612,509 @@ double FSI_ALE_Problem<dim>::compute_point_value (Point<dim> p,
 // quantities could also be achieved by domain integral computation. 
 // Nevertheless, we choose the line integration because deal.II provides
 // all routines for face value evaluation. 
-template <int dim>
-void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor()
-{
+// template <int dim>
+// void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor()
+// {
     
-  const QGauss<dim-1> face_quadrature_formula (3);
-  FEFaceValues<dim> fe_face_values (fe, face_quadrature_formula, 
-				    update_values | update_gradients | update_normal_vectors | 
-				    update_JxW_values);
+//   const QGauss<dim-1> face_quadrature_formula (3);
+//   FEFaceValues<dim> fe_face_values (fe, face_quadrature_formula, 
+// 				    update_values | update_gradients | update_normal_vectors | 
+// 				    update_JxW_values);
   
-  const unsigned int dofs_per_cell = fe.dofs_per_cell;
-  const unsigned int n_face_q_points = face_quadrature_formula.size();
+//   const unsigned int dofs_per_cell = fe.dofs_per_cell;
+//   const unsigned int n_face_q_points = face_quadrature_formula.size();
 
-  std::vector<unsigned int> local_dof_indices (dofs_per_cell);
-  std::vector<Vector<double> >  face_solution_values (n_face_q_points, 
-						      Vector<double> (dim+dim+1));
+//   std::vector<unsigned int> local_dof_indices (dofs_per_cell);
+//   std::vector<Vector<double> >  face_solution_values (n_face_q_points, 
+// 						      Vector<double> (dim+dim+1));
 
-  std::vector<std::vector<Tensor<1,dim> > > 
-    face_solution_grads (n_face_q_points, std::vector<Tensor<1,dim> > (dim+dim+1));
+//   std::vector<std::vector<Tensor<1,dim> > > 
+//     face_solution_grads (n_face_q_points, std::vector<Tensor<1,dim> > (dim+dim+1));
   
-  Tensor<1,dim> drag_lift_value;
+//   Tensor<1,dim> drag_lift_value;
   
-  typename DoFHandler<dim>::active_cell_iterator
-    cell = dof_handler.begin_active(),
-    endc = dof_handler.end();
+//   typename DoFHandler<dim>::active_cell_iterator
+//     cell = dof_handler.begin_active(),
+//     endc = dof_handler.end();
 
-   for (; cell!=endc; ++cell)
-     {
+//    for (; cell!=endc; ++cell)
+//      {
 
-       // First, we are going to compute the forces that
-       // act on the cylinder. We notice that only the fluid 
-       // equations are defined here.
-       for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
-	 if (cell->face(face)->at_boundary() && 
-	     cell->face(face)->boundary_indicator()==80)
-	   {
-	     fe_face_values.reinit (cell, face);
-	     fe_face_values.get_function_values (solution, face_solution_values);
-	     fe_face_values.get_function_gradients (solution, face_solution_grads);
+//        // First, we are going to compute the forces that
+//        // act on the cylinder. We notice that only the fluid 
+//        // equations are defined here.
+//        for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
+// 	 if (cell->face(face)->at_boundary() && 
+// 	     cell->face(face)->boundary_indicator()==80)
+// 	   {
+// 	     fe_face_values.reinit (cell, face);
+// 	     fe_face_values.get_function_values (solution, face_solution_values);
+// 	     fe_face_values.get_function_gradients (solution, face_solution_grads);
 	 	      
-	     for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point)
-	       {	       
-		 const Tensor<2,dim> pI = ALE_Transformations
-		   ::get_pI<dim> (q_point, face_solution_values);
+// 	     for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point)
+// 	       {	       
+// 		 const Tensor<2,dim> pI = ALE_Transformations
+// 		   ::get_pI<dim> (q_point, face_solution_values);
 		 
-		 const Tensor<2,dim> grad_v = ALE_Transformations 
-		   ::get_grad_v<dim> (q_point, face_solution_grads);
+// 		 const Tensor<2,dim> grad_v = ALE_Transformations 
+// 		   ::get_grad_v<dim> (q_point, face_solution_grads);
 		 
-		 const Tensor<2,dim> grad_v_T = ALE_Transformations
-		   ::get_grad_v_T<dim> (grad_v);
+// 		 const Tensor<2,dim> grad_v_T = ALE_Transformations
+// 		   ::get_grad_v_T<dim> (grad_v);
 		 
-		 const Tensor<2,dim> F = ALE_Transformations
-		   ::get_F<dim> (q_point, face_solution_grads);	       	     
+// 		 const Tensor<2,dim> F = ALE_Transformations
+// 		   ::get_F<dim> (q_point, face_solution_grads);	       	     
 		 
-		 const Tensor<2,dim> F_Inverse = ALE_Transformations
-		   ::get_F_Inverse<dim> (F);
+// 		 const Tensor<2,dim> F_Inverse = ALE_Transformations
+// 		   ::get_F_Inverse<dim> (F);
 		 
-		 const Tensor<2,dim> F_Inverse_T = ALE_Transformations
-		   ::get_F_Inverse_T<dim> (F_Inverse);
+// 		 const Tensor<2,dim> F_Inverse_T = ALE_Transformations
+// 		   ::get_F_Inverse_T<dim> (F_Inverse);
 		 
-		 const double J = ALE_Transformations
-		   ::get_J<dim> (F);
+// 		 const double J = ALE_Transformations
+// 		   ::get_J<dim> (F);
 		 
-		 const Tensor<2,dim> sigma_ALE = NSE_in_ALE
-		   ::get_stress_fluid_except_pressure_ALE<dim> 
-		   (density_fluid, viscosity, 
-		    grad_v, grad_v_T, F_Inverse, F_Inverse_T );
+// 		 const Tensor<2,dim> sigma_ALE = NSE_in_ALE
+// 		   ::get_stress_fluid_except_pressure_ALE<dim> 
+// 		   (density_fluid, viscosity, 
+// 		    grad_v, grad_v_T, F_Inverse, F_Inverse_T );
 		 
-		 Tensor<2,dim> stress_fluid;
-		 stress_fluid.clear();
-		 stress_fluid = (J * sigma_ALE * F_Inverse_T);
+// 		 Tensor<2,dim> stress_fluid;
+// 		 stress_fluid.clear();
+// 		 stress_fluid = (J * sigma_ALE * F_Inverse_T);
 		 
-		 Tensor<2,dim> fluid_pressure;
-		 fluid_pressure.clear();
-		 fluid_pressure = (-pI * J * F_Inverse_T);
+// 		 Tensor<2,dim> fluid_pressure;
+// 		 fluid_pressure.clear();
+// 		 fluid_pressure = (-pI * J * F_Inverse_T);
 		 
-		 drag_lift_value -= (stress_fluid + fluid_pressure) * 
-		   fe_face_values.normal_vector(q_point)* fe_face_values.JxW(q_point); 
+// 		 drag_lift_value -= (stress_fluid + fluid_pressure) * 
+// 		   fe_face_values.normal_vector(q_point)* fe_face_values.JxW(q_point); 
 		 
-	       }
-	   } // end boundary 80 for fluid
+// 	       }
+// 	   } // end boundary 80 for fluid
        
-       // Now, we compute the forces that act on the beam. Here,
-       // we have two possibilities as already discussed in the paper.
-       // We use again the fluid tensor to compute 
-       // drag and lift:
-       if (cell->material_id() == fluid_id)
-	 {	   
-	   for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
-	     if (cell->neighbor_index(face) != -1)	       
-	       if (cell->material_id() !=  cell->neighbor(face)->material_id() &&
-		   cell->face(face)->boundary_indicator()!=80)
-		 {
+//        // Now, we compute the forces that act on the beam. Here,
+//        // we have two possibilities as already discussed in the paper.
+//        // We use again the fluid tensor to compute 
+//        // drag and lift:
+//        if (cell->material_id() == fluid_id)
+// 	 {	   
+// 	   for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
+// 	     if (cell->neighbor_index(face) != -1)	       
+// 	       if (cell->material_id() !=  cell->neighbor(face)->material_id() &&
+// 		   cell->face(face)->boundary_indicator()!=80)
+// 		 {
 		   
-		   fe_face_values.reinit (cell, face);
-		   fe_face_values.get_function_values (solution, face_solution_values);
-		   fe_face_values.get_function_gradients (solution, face_solution_grads);
+// 		   fe_face_values.reinit (cell, face);
+// 		   fe_face_values.get_function_values (solution, face_solution_values);
+// 		   fe_face_values.get_function_gradients (solution, face_solution_grads);
 		   		  
-		   for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point)
-		     {
-		       const Tensor<2,dim> pI = ALE_Transformations
-			 ::get_pI<dim> (q_point, face_solution_values);
+// 		   for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point)
+// 		     {
+// 		       const Tensor<2,dim> pI = ALE_Transformations
+// 			 ::get_pI<dim> (q_point, face_solution_values);
 		       
-		       const Tensor<2,dim> grad_v = ALE_Transformations 
-			 ::get_grad_v<dim> (q_point, face_solution_grads);
+// 		       const Tensor<2,dim> grad_v = ALE_Transformations 
+// 			 ::get_grad_v<dim> (q_point, face_solution_grads);
 		       
-		       const Tensor<2,dim> grad_v_T = ALE_Transformations
-			 ::get_grad_v_T<dim> (grad_v);
+// 		       const Tensor<2,dim> grad_v_T = ALE_Transformations
+// 			 ::get_grad_v_T<dim> (grad_v);
 		       
-		       const Tensor<2,dim> F = ALE_Transformations
-			 ::get_F<dim> (q_point, face_solution_grads);	       	     
+// 		       const Tensor<2,dim> F = ALE_Transformations
+// 			 ::get_F<dim> (q_point, face_solution_grads);	       	     
 		       
-		       const Tensor<2,dim> F_Inverse = ALE_Transformations
-			 ::get_F_Inverse<dim> (F);
+// 		       const Tensor<2,dim> F_Inverse = ALE_Transformations
+// 			 ::get_F_Inverse<dim> (F);
 		       
-		       const Tensor<2,dim> F_Inverse_T = ALE_Transformations
-			 ::get_F_Inverse_T<dim> (F_Inverse);
+// 		       const Tensor<2,dim> F_Inverse_T = ALE_Transformations
+// 			 ::get_F_Inverse_T<dim> (F_Inverse);
 		       
-		       const double J = ALE_Transformations
-			 ::get_J<dim> (F);
+// 		       const double J = ALE_Transformations
+// 			 ::get_J<dim> (F);
 		       
-		       const Tensor<2,dim> sigma_ALE = NSE_in_ALE
-			 ::get_stress_fluid_except_pressure_ALE<dim> 
-			 (density_fluid, viscosity, grad_v, grad_v_T, F_Inverse, F_Inverse_T );
+// 		       const Tensor<2,dim> sigma_ALE = NSE_in_ALE
+// 			 ::get_stress_fluid_except_pressure_ALE<dim> 
+// 			 (density_fluid, viscosity, grad_v, grad_v_T, F_Inverse, F_Inverse_T );
 		       
-		       Tensor<2,dim> stress_fluid;
-		       stress_fluid.clear();
-		       stress_fluid = (J * sigma_ALE * F_Inverse_T);
+// 		       Tensor<2,dim> stress_fluid;
+// 		       stress_fluid.clear();
+// 		       stress_fluid = (J * sigma_ALE * F_Inverse_T);
 		       
-		       Tensor<2,dim> fluid_pressure;
-		       fluid_pressure.clear();
-		       fluid_pressure = (-pI * J * F_Inverse_T);
+// 		       Tensor<2,dim> fluid_pressure;
+// 		       fluid_pressure.clear();
+// 		       fluid_pressure = (-pI * J * F_Inverse_T);
 		       
-		       drag_lift_value -= 1.0 * (stress_fluid + fluid_pressure) * 
-			 fe_face_values.normal_vector(q_point)* fe_face_values.JxW(q_point); 		       		       
-		     }
-		 }	   
-	 }               
-     } 
+// 		       drag_lift_value -= 1.0 * (stress_fluid + fluid_pressure) * 
+// 			 fe_face_values.normal_vector(q_point)* fe_face_values.JxW(q_point); 		       		       
+// 		     }
+// 		 }	   
+// 	 }               
+//      } 
    
-   std::cout << "Face drag:   " << time << "   " << drag_lift_value[0] << std::endl;
-   std::cout << "Face lift:   " << time << "   " << drag_lift_value[1] << std::endl;
-}
+//    std::cout << "Face drag:   " << time << "   " << drag_lift_value[0] << std::endl;
+//    std::cout << "Face lift:   " << time << "   " << drag_lift_value[1] << std::endl;
+// }
 
-template <int dim>
-void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain()
-{
+// template <int dim>
+// void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain()
+// {
 
-  unsigned int drag_lift_select = 0;
-  double drag_lift_constant = 1.0;
+//   unsigned int drag_lift_select = 0;
+//   double drag_lift_constant = 1.0;
 
-  double  value = 0.0;
-  system_rhs = 0;
-  const QGauss<dim> quadrature_formula (3);
-   FEValues<dim>     fe_values (fe, quadrature_formula,
-				update_values |
-				update_gradients |
-				update_JxW_values |
-				update_q_points);
+//   double  value = 0.0;
+//   system_rhs = 0;
+//   const QGauss<dim> quadrature_formula (3);
+//    FEValues<dim>     fe_values (fe, quadrature_formula,
+// 				update_values |
+// 				update_gradients |
+// 				update_JxW_values |
+// 				update_q_points);
 
-   const unsigned int dofs_per_cell = fe.dofs_per_cell;
-   const unsigned int n_q_points    = quadrature_formula.size();
+//    const unsigned int dofs_per_cell = fe.dofs_per_cell;
+//    const unsigned int n_q_points    = quadrature_formula.size();
 
-   const FEValuesExtractors::Vector velocities (0);
-  const FEValuesExtractors::Vector displacements (dim); 
-  const FEValuesExtractors::Scalar pressure (dim+dim); 
+//    const FEValuesExtractors::Vector velocities (0);
+//   const FEValuesExtractors::Vector displacements (dim); 
+//   const FEValuesExtractors::Scalar pressure (dim+dim); 
 
 
 
-   Vector<double> local_rhs (dofs_per_cell);
-   std::vector<unsigned int> local_dof_indices (dofs_per_cell);
+//    Vector<double> local_rhs (dofs_per_cell);
+//    std::vector<unsigned int> local_dof_indices (dofs_per_cell);
 
-   std::vector<Vector<double> > old_solution_values (n_q_points, Vector<double> (dim+dim+1));
+//    std::vector<Vector<double> > old_solution_values (n_q_points, Vector<double> (dim+dim+1));
 
-   std::vector<std::vector<Tensor<1,dim> > > 
-     old_solution_grads (n_q_points, std::vector<Tensor<1,dim> > (dim+dim+1));
+//    std::vector<std::vector<Tensor<1,dim> > > 
+//      old_solution_grads (n_q_points, std::vector<Tensor<1,dim> > (dim+dim+1));
 
-     typename DoFHandler<dim>::active_cell_iterator
-     cell = dof_handler.begin_active(),
-     endc = dof_handler.end();
+//      typename DoFHandler<dim>::active_cell_iterator
+//      cell = dof_handler.begin_active(),
+//      endc = dof_handler.end();
 
-   for (; cell!=endc; ++cell)
-   {
-     local_rhs = 0;
+//    for (; cell!=endc; ++cell)
+//    {
+//      local_rhs = 0;
 
-     fe_values.reinit (cell);
-     fe_values.get_function_values (solution, old_solution_values);
-     fe_values.get_function_gradients (solution, old_solution_grads);
+//      fe_values.reinit (cell);
+//      fe_values.get_function_values (solution, old_solution_values);
+//      fe_values.get_function_gradients (solution, old_solution_grads);
 
-     for (unsigned int q=0; q<n_q_points; ++q)
-       {
-	 const Tensor<2,dim> pI = ALE_Transformations
-		::get_pI<dim> (q, old_solution_values);
+//      for (unsigned int q=0; q<n_q_points; ++q)
+//        {
+// 	 const Tensor<2,dim> pI = ALE_Transformations
+// 		::get_pI<dim> (q, old_solution_values);
 	      
-	      const Tensor<1,dim> v = ALE_Transformations
-		::get_v<dim> (q, old_solution_values);
+// 	      const Tensor<1,dim> v = ALE_Transformations
+// 		::get_v<dim> (q, old_solution_values);
 	      
-	      const Tensor<2,dim> grad_v = ALE_Transformations 
-		::get_grad_v<dim> (q, old_solution_grads);
+// 	      const Tensor<2,dim> grad_v = ALE_Transformations 
+// 		::get_grad_v<dim> (q, old_solution_grads);
 	      
-	      const Tensor<2,dim> grad_v_T = ALE_Transformations
-		::get_grad_v_T<dim> (grad_v);
+// 	      const Tensor<2,dim> grad_v_T = ALE_Transformations
+// 		::get_grad_v_T<dim> (grad_v);
 	      
-	      const Tensor<2,dim> F = ALE_Transformations
-		::get_F<dim> (q, old_solution_grads);	       	     
+// 	      const Tensor<2,dim> F = ALE_Transformations
+// 		::get_F<dim> (q, old_solution_grads);	       	     
 	      
-	      const Tensor<2,dim> F_Inverse = ALE_Transformations
-		::get_F_Inverse<dim> (F);
+// 	      const Tensor<2,dim> F_Inverse = ALE_Transformations
+// 		::get_F_Inverse<dim> (F);
 	      
-	      const Tensor<2,dim> F_Inverse_T = ALE_Transformations
-		::get_F_Inverse_T<dim> (F_Inverse);
+// 	      const Tensor<2,dim> F_Inverse_T = ALE_Transformations
+// 		::get_F_Inverse_T<dim> (F_Inverse);
 	      
-	      const double J = ALE_Transformations
-		::get_J<dim> (F);
+// 	      const double J = ALE_Transformations
+// 		::get_J<dim> (F);
 	     
 
-	      // This is the fluid stress tensor in ALE formulation
-	      const Tensor<2,dim> sigma_ALE = NSE_in_ALE
-		::get_stress_fluid_except_pressure_ALE<dim> 
-		(density_fluid, viscosity, grad_v, grad_v_T, F_Inverse, F_Inverse_T );
+// 	      // This is the fluid stress tensor in ALE formulation
+// 	      const Tensor<2,dim> sigma_ALE = NSE_in_ALE
+// 		::get_stress_fluid_except_pressure_ALE<dim> 
+// 		(density_fluid, viscosity, grad_v, grad_v_T, F_Inverse, F_Inverse_T );
 	      
 
-	   Tensor<2,dim> stress_fluid;
-	      stress_fluid.clear();
-	      stress_fluid = (J * sigma_ALE * F_Inverse_T);
+// 	   Tensor<2,dim> stress_fluid;
+// 	      stress_fluid.clear();
+// 	      stress_fluid = (J * sigma_ALE * F_Inverse_T);
 	      
 
-	   Tensor<2,dim> fluid_pressure;
-	      fluid_pressure.clear();
-	      fluid_pressure = (-pI * J * F_Inverse_T);
+// 	   Tensor<2,dim> fluid_pressure;
+// 	      fluid_pressure.clear();
+// 	      fluid_pressure = (-pI * J * F_Inverse_T);
 	      
 
-	 Tensor<1,dim> convection_fluid;
-	 convection_fluid.clear();
-	 convection_fluid = density_fluid * J * (grad_v * F_Inverse * v);
+// 	 Tensor<1,dim> convection_fluid;
+// 	 convection_fluid.clear();
+// 	 convection_fluid = density_fluid * J * (grad_v * F_Inverse * v);
 
-	 // Divergence of the fluid in the ALE formulation
-	 const double incompressiblity_fluid = NSE_in_ALE
-	   ::get_Incompressibility_ALE<dim> (q, old_solution_grads);
+// 	 // Divergence of the fluid in the ALE formulation
+// 	 const double incompressiblity_fluid = NSE_in_ALE
+// 	   ::get_Incompressibility_ALE<dim> (q, old_solution_grads);
 	    
 
 	 
-	 for (unsigned int i=0; i<dofs_per_cell; ++i)
-	   {
-	     const unsigned int comp_i = fe.system_to_component_index(i).first;
+// 	 for (unsigned int i=0; i<dofs_per_cell; ++i)
+// 	   {
+// 	     const unsigned int comp_i = fe.system_to_component_index(i).first;
 	     
-	     if (comp_i == 0 || comp_i == 1)
-	       {   		  
-		 const Tensor<1,dim> phi_i_v = fe_values[velocities].value (i, q);
-		 const Tensor<2,dim> phi_i_grads_v = fe_values[velocities].gradient (i, q);
+// 	     if (comp_i == 0 || comp_i == 1)
+// 	       {   		  
+// 		 const Tensor<1,dim> phi_i_v = fe_values[velocities].value (i, q);
+// 		 const Tensor<2,dim> phi_i_grads_v = fe_values[velocities].gradient (i, q);
 		 
-		 local_rhs(i) -= (convection_fluid * phi_i_v +
-				  scalar_product(fluid_pressure, phi_i_grads_v) +
-				  scalar_product(stress_fluid, phi_i_grads_v) 						
-				  ) *  fe_values.JxW(q);
+// 		 local_rhs(i) -= (convection_fluid * phi_i_v +
+// 				  scalar_product(fluid_pressure, phi_i_grads_v) +
+// 				  scalar_product(stress_fluid, phi_i_grads_v) 						
+// 				  ) *  fe_values.JxW(q);
 		 
-	       }		
-	     else if (comp_i == 2 || comp_i == 3)
-	       {	
+// 	       }		
+// 	     else if (comp_i == 2 || comp_i == 3)
+// 	       {	
 		 
-	       }  
-	     else if (comp_i == 4)
-	       {
-		 const double phi_i_p = fe_values[pressure].value (i, q);
-		 local_rhs(i) -= (incompressiblity_fluid * phi_i_p) *  fe_values.JxW(q);
-	       }
-	   }
-       }  // end q_points
+// 	       }  
+// 	     else if (comp_i == 4)
+// 	       {
+// 		 const double phi_i_p = fe_values[pressure].value (i, q);
+// 		 local_rhs(i) -= (incompressiblity_fluid * phi_i_p) *  fe_values.JxW(q);
+// 	       }
+// 	   }
+//        }  // end q_points
      
-     cell->get_dof_indices (local_dof_indices);
+//      cell->get_dof_indices (local_dof_indices);
      
-     for (unsigned int i=0; i<dofs_per_cell; ++i)
-       system_rhs(local_dof_indices[i]) += local_rhs(i);
+//      for (unsigned int i=0; i<dofs_per_cell; ++i)
+//        system_rhs(local_dof_indices[i]) += local_rhs(i);
 
-   }  // end cell
-
-
-
-   std::vector<bool> component_mask (dim+dim+1, true);
-   component_mask[dim] = false;
-    component_mask[dim+1] = true;
-    component_mask[dim+dim] = true;  //pressure
-
-   std::map<unsigned int,double> boundary_values;
-   VectorTools::interpolate_boundary_values (dof_handler,
-					     80,
-					     ComponentSelectFunction<dim>(drag_lift_select, drag_lift_constant,dim+dim+1),
-					     boundary_values,
-					     component_mask);
-
-
-   VectorTools::interpolate_boundary_values (dof_handler,
-       0,
-       ZeroFunction<dim>(dim+dim+1),
-       boundary_values,
-       component_mask);
-
-   VectorTools::interpolate_boundary_values (dof_handler,
-       1,
-       ZeroFunction<dim>(dim+dim+1),
-       boundary_values,
-       component_mask);
-
-   VectorTools::interpolate_boundary_values (dof_handler,
-       2,
-       ZeroFunction<dim>(dim+dim+1),
-       boundary_values,
-       component_mask);
-
-   VectorTools::interpolate_boundary_values (dof_handler,
-       81,
-       ZeroFunction<dim>(dim+dim+1),
-       boundary_values,
-       component_mask);
-
-   value = 0.;
-
-   for(std::map<unsigned int,double>::const_iterator 
-p=boundary_values.begin(); p!=boundary_values.end(); p++)
-   {
-     value += p->second * system_rhs(p->first);
-   }
-
-
-   global_drag_lift_value += value;
-
-}
+//    }  // end cell
 
 
 
-template <int dim>
-void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain_structure()
-{
+//    std::vector<bool> component_mask (dim+dim+1, true);
+//    component_mask[dim] = false;
+//     component_mask[dim+1] = true;
+//     component_mask[dim+dim] = true;  //pressure
 
-  unsigned int drag_lift_select = 0;
-  double drag_lift_constant = 1.0;
-
-  double  value = 0.0;
-  system_rhs = 0;
-  const QGauss<dim> quadrature_formula (3);
-   FEValues<dim>     fe_values (fe, quadrature_formula,
-				update_values |
-				update_gradients |
-				update_JxW_values |
-				update_q_points);
-
-   const unsigned int dofs_per_cell = fe.dofs_per_cell;
-   const unsigned int n_q_points    = quadrature_formula.size();
-
-   const FEValuesExtractors::Vector velocities (0);
-  const FEValuesExtractors::Vector displacements (dim); 
-  const FEValuesExtractors::Scalar pressure (dim+dim); 
+//    std::map<unsigned int,double> boundary_values;
+//    VectorTools::interpolate_boundary_values (dof_handler,
+// 					     80,
+// 					     ComponentSelectFunction<dim>(drag_lift_select, drag_lift_constant,dim+dim+1),
+// 					     boundary_values,
+// 					     component_mask);
 
 
+//    VectorTools::interpolate_boundary_values (dof_handler,
+//        0,
+//        ZeroFunction<dim>(dim+dim+1),
+//        boundary_values,
+//        component_mask);
 
-   Vector<double> local_rhs (dofs_per_cell);
-   std::vector<unsigned int> local_dof_indices (dofs_per_cell);
+//    VectorTools::interpolate_boundary_values (dof_handler,
+//        1,
+//        ZeroFunction<dim>(dim+dim+1),
+//        boundary_values,
+//        component_mask);
 
-   std::vector<Vector<double> > old_solution_values (n_q_points, Vector<double> (dim+dim+1));
+//    VectorTools::interpolate_boundary_values (dof_handler,
+//        2,
+//        ZeroFunction<dim>(dim+dim+1),
+//        boundary_values,
+//        component_mask);
 
-   std::vector<std::vector<Tensor<1,dim> > > 
-     old_solution_grads (n_q_points, std::vector<Tensor<1,dim> > (dim+dim+1));
+//    VectorTools::interpolate_boundary_values (dof_handler,
+//        81,
+//        ZeroFunction<dim>(dim+dim+1),
+//        boundary_values,
+//        component_mask);
 
-     typename DoFHandler<dim>::active_cell_iterator
-     cell = dof_handler.begin_active(),
-     endc = dof_handler.end();
+//    value = 0.;
 
-   for (; cell!=endc; ++cell)
-   {
-     local_rhs = 0;
+//    for(std::map<unsigned int,double>::const_iterator 
+// p=boundary_values.begin(); p!=boundary_values.end(); p++)
+//    {
+//      value += p->second * system_rhs(p->first);
+//    }
 
-     fe_values.reinit (cell);
-     fe_values.get_function_values (solution, old_solution_values);
-     fe_values.get_function_gradients (solution, old_solution_grads);
 
-     if (cell->material_id() == solid_id)
-     for (unsigned int q=0; q<n_q_points; ++q)
-       {
-	      const Tensor<2,dim> F = ALE_Transformations
-		::get_F<dim> (q, old_solution_grads);
+//    global_drag_lift_value += value;
+
+// }
+
+
+
+// template <int dim>
+// void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain_structure()
+// {
+
+//   unsigned int drag_lift_select = 0;
+//   double drag_lift_constant = 1.0;
+
+//   double  value = 0.0;
+//   system_rhs = 0;
+//   const QGauss<dim> quadrature_formula (3);
+//    FEValues<dim>     fe_values (fe, quadrature_formula,
+// 				update_values |
+// 				update_gradients |
+// 				update_JxW_values |
+// 				update_q_points);
+
+//    const unsigned int dofs_per_cell = fe.dofs_per_cell;
+//    const unsigned int n_q_points    = quadrature_formula.size();
+
+//    const FEValuesExtractors::Vector velocities (0);
+//   const FEValuesExtractors::Vector displacements (dim); 
+//   const FEValuesExtractors::Scalar pressure (dim+dim); 
+
+
+
+//    Vector<double> local_rhs (dofs_per_cell);
+//    std::vector<unsigned int> local_dof_indices (dofs_per_cell);
+
+//    std::vector<Vector<double> > old_solution_values (n_q_points, Vector<double> (dim+dim+1));
+
+//    std::vector<std::vector<Tensor<1,dim> > > 
+//      old_solution_grads (n_q_points, std::vector<Tensor<1,dim> > (dim+dim+1));
+
+//      typename DoFHandler<dim>::active_cell_iterator
+//      cell = dof_handler.begin_active(),
+//      endc = dof_handler.end();
+
+//    for (; cell!=endc; ++cell)
+//    {
+//      local_rhs = 0;
+
+//      fe_values.reinit (cell);
+//      fe_values.get_function_values (solution, old_solution_values);
+//      fe_values.get_function_gradients (solution, old_solution_grads);
+
+//      if (cell->material_id() == solid_id)
+//      for (unsigned int q=0; q<n_q_points; ++q)
+//        {
+// 	      const Tensor<2,dim> F = ALE_Transformations
+// 		::get_F<dim> (q, old_solution_grads);
 	      
-	      const Tensor<2,dim> F_T = ALE_Transformations
-		::get_F_T<dim> (F);
+// 	      const Tensor<2,dim> F_T = ALE_Transformations
+// 		::get_F_T<dim> (F);
 	      
-	      const Tensor<2,dim> Identity = ALE_Transformations
-		::get_Identity<dim> ();
+// 	      const Tensor<2,dim> Identity = ALE_Transformations
+// 		::get_Identity<dim> ();
 	      
-	      const Tensor<2,dim> F_Inverse = ALE_Transformations
-		::get_F_Inverse<dim> (F);
+// 	      const Tensor<2,dim> F_Inverse = ALE_Transformations
+// 		::get_F_Inverse<dim> (F);
 	      
-	      const Tensor<2,dim> F_Inverse_T = ALE_Transformations
-		::get_F_Inverse_T<dim> (F_Inverse);
+// 	      const Tensor<2,dim> F_Inverse_T = ALE_Transformations
+// 		::get_F_Inverse_T<dim> (F_Inverse);
 	      
-	      const double J = ALE_Transformations
-		::get_J<dim> (F);
+// 	      const double J = ALE_Transformations
+// 		::get_J<dim> (F);
 	      
-	      const Tensor<2,dim> E = Structure_Terms_in_ALE
-		::get_E<dim> (F_T, F, Identity);
+// 	      const Tensor<2,dim> E = Structure_Terms_in_ALE
+// 		::get_E<dim> (F_T, F, Identity);
 	      
-	      const double tr_E = Structure_Terms_in_ALE
-		::get_tr_E<dim> (E);
+// 	      const double tr_E = Structure_Terms_in_ALE
+// 		::get_tr_E<dim> (E);
 
 
-	  // STVK structure model
-	      Tensor<2,dim> sigma_structure_ALE;
-	      sigma_structure_ALE.clear();
-	      sigma_structure_ALE = (1.0/J *
-				     F * (lame_coefficient_lambda *
-					  tr_E * Identity +
-					  2 * lame_coefficient_mu *
-					  E) * 
-				     F_T);
+// 	  // STVK structure model
+// 	      Tensor<2,dim> sigma_structure_ALE;
+// 	      sigma_structure_ALE.clear();
+// 	      sigma_structure_ALE = (1.0/J *
+// 				     F * (lame_coefficient_lambda *
+// 					  tr_E * Identity +
+// 					  2 * lame_coefficient_mu *
+// 					  E) * 
+// 				     F_T);
 	      
 
-	 Tensor<2,dim> stress_term;
-	 stress_term.clear();
-	 stress_term = (J * sigma_structure_ALE * F_Inverse_T);
+// 	 Tensor<2,dim> stress_term;
+// 	 stress_term.clear();
+// 	 stress_term = (J * sigma_structure_ALE * F_Inverse_T);
 	      
 
 	 
-	 for (unsigned int i=0; i<dofs_per_cell; ++i)
-	   {
-	     const unsigned int comp_i = fe.system_to_component_index(i).first;
+// 	 for (unsigned int i=0; i<dofs_per_cell; ++i)
+// 	   {
+// 	     const unsigned int comp_i = fe.system_to_component_index(i).first;
 	     
-	     if (comp_i == 0 || comp_i == 1)
-	       {   		  
-		 const Tensor<2,dim> phi_i_grads_v = fe_values[velocities].gradient (i, q);
+// 	     if (comp_i == 0 || comp_i == 1)
+// 	       {   		  
+// 		 const Tensor<2,dim> phi_i_grads_v = fe_values[velocities].gradient (i, q);
 		 
-		 local_rhs(i) -= (scalar_product(stress_term,phi_i_grads_v) 
-				  ) * fe_values.JxW(q);
+// 		 local_rhs(i) -= (scalar_product(stress_term,phi_i_grads_v) 
+// 				  ) * fe_values.JxW(q);
 		 
-	       }		
-	     else if (comp_i == 2 || comp_i == 3)
-	       {	
+// 	       }		
+// 	     else if (comp_i == 2 || comp_i == 3)
+// 	       {	
 		 
-	       }  
-	     else if (comp_i == 4)
-	       {
+// 	       }  
+// 	     else if (comp_i == 4)
+// 	       {
 	
-	       }
-	   }
-       }  // end q_points
+// 	       }
+// 	   }
+//        }  // end q_points
      
-     cell->get_dof_indices (local_dof_indices);
+//      cell->get_dof_indices (local_dof_indices);
      
-     for (unsigned int i=0; i<dofs_per_cell; ++i)
-       system_rhs(local_dof_indices[i]) += local_rhs(i);
+//      for (unsigned int i=0; i<dofs_per_cell; ++i)
+//        system_rhs(local_dof_indices[i]) += local_rhs(i);
 
-   }  // end cell
-
-
-
-   std::vector<bool> component_mask (dim+dim+1, true);
-   component_mask[dim] = false;
-    component_mask[dim+1] = true;
-    component_mask[dim+dim] = true;  //pressure
-
-   std::map<unsigned int,double> boundary_values;
-
-   VectorTools::interpolate_boundary_values (dof_handler,
-					     81,
-					     ComponentSelectFunction<dim>(drag_lift_select, drag_lift_constant,dim+dim+1),
-					     boundary_values,
-					     component_mask);
-
-   VectorTools::interpolate_boundary_values (dof_handler,
-					     80,
-					     ZeroFunction<dim>(dim+dim+1),
-					     boundary_values,
-					     component_mask);
+//    }  // end cell
 
 
-   VectorTools::interpolate_boundary_values (dof_handler,
-       0,
-       ZeroFunction<dim>(dim+dim+1),
-       boundary_values,
-       component_mask);
 
-   VectorTools::interpolate_boundary_values (dof_handler,
-       1,
-       ZeroFunction<dim>(dim+dim+1),
-       boundary_values,
-       component_mask);
+//    std::vector<bool> component_mask (dim+dim+1, true);
+//    component_mask[dim] = false;
+//     component_mask[dim+1] = true;
+//     component_mask[dim+dim] = true;  //pressure
 
-   VectorTools::interpolate_boundary_values (dof_handler,
-       2,
-       ZeroFunction<dim>(dim+dim+1),
-       boundary_values,
-       component_mask);
+//    std::map<unsigned int,double> boundary_values;
 
+//    VectorTools::interpolate_boundary_values (dof_handler,
+// 					     81,
+// 					     ComponentSelectFunction<dim>(drag_lift_select, drag_lift_constant,dim+dim+1),
+// 					     boundary_values,
+// 					     component_mask);
 
-   value = 0.;
-
-   for(std::map<unsigned int,double>::const_iterator 
-p=boundary_values.begin(); p!=boundary_values.end(); p++)
-   {
-     value += p->second * system_rhs(p->first);
-   }
+//    VectorTools::interpolate_boundary_values (dof_handler,
+// 					     80,
+// 					     ZeroFunction<dim>(dim+dim+1),
+// 					     boundary_values,
+// 					     component_mask);
 
 
-   global_drag_lift_value += value;
+//    VectorTools::interpolate_boundary_values (dof_handler,
+//        0,
+//        ZeroFunction<dim>(dim+dim+1),
+//        boundary_values,
+//        component_mask);
+
+//    VectorTools::interpolate_boundary_values (dof_handler,
+//        1,
+//        ZeroFunction<dim>(dim+dim+1),
+//        boundary_values,
+//        component_mask);
+
+//    VectorTools::interpolate_boundary_values (dof_handler,
+//        2,
+//        ZeroFunction<dim>(dim+dim+1),
+//        boundary_values,
+//        component_mask);
 
 
-}
+//    value = 0.;
+
+//    for(std::map<unsigned int,double>::const_iterator 
+// p=boundary_values.begin(); p!=boundary_values.end(); p++)
+//    {
+//      value += p->second * system_rhs(p->first);
+//    }
+
+
+//    global_drag_lift_value += value;
+
+
+// }
 
 
 
@@ -3126,23 +3184,23 @@ void FSI_ALE_Problem<dim>::compute_minimal_J()
 template<int dim>
 void FSI_ALE_Problem<dim>::compute_functional_values()
 {
-  double x1,y1;
-  x1 = compute_point_value(Point<dim>(0.6,0.2), dim);
-  y1 = compute_point_value(Point<dim>(0.6,0.2), dim+1);
+//   double x1,y1;
+//   x1 = compute_point_value(Point<dim>(0.6,0.2), dim);
+//   y1 = compute_point_value(Point<dim>(0.6,0.2), dim+1);
   
-  std::cout << "------------------" << std::endl;
-  std::cout << "DisX: " << time << "   " << x1 << std::endl;
-  std::cout << "DisY: " << time << "   " << y1 << std::endl;
-  std::cout << "------------------" << std::endl;
+//   std::cout << "------------------" << std::endl;
+//   std::cout << "DisX: " << time << "   " << x1 << std::endl;
+//   std::cout << "DisY: " << time << "   " << y1 << std::endl;
+//   std::cout << "------------------" << std::endl;
   
-  // Compute drag and lift via line integral
-  compute_drag_lift_fsi_fluid_tensor();
+//   // Compute drag and lift via line integral
+//   compute_drag_lift_fsi_fluid_tensor();
 
-  // Compute drag and lift via domain integral
-  global_drag_lift_value = 0.0;
-  compute_drag_lift_fsi_fluid_tensor_domain();
-  compute_drag_lift_fsi_fluid_tensor_domain_structure();
-  std::cout << "Domain drag: " << time << "   "  << global_drag_lift_value << std::endl;
+//   // Compute drag and lift via domain integral
+//   global_drag_lift_value = 0.0;
+//   compute_drag_lift_fsi_fluid_tensor_domain();
+//   compute_drag_lift_fsi_fluid_tensor_domain_structure();
+//   std::cout << "Domain drag: " << time << "   "  << global_drag_lift_value << std::endl;
 
   std::cout << "------------------" << std::endl;
   compute_minimal_J();
@@ -3151,35 +3209,35 @@ void FSI_ALE_Problem<dim>::compute_functional_values()
 }
 
 
-template<int dim>
-void FSI_ALE_Problem<dim>::refine_mesh()
-{
-  typename DoFHandler<dim>::active_cell_iterator
-    cell = dof_handler.begin_active(),
-    endc = dof_handler.end();
+// template<int dim>
+// void FSI_ALE_Problem<dim>::refine_mesh()
+// {
+//   typename DoFHandler<dim>::active_cell_iterator
+//     cell = dof_handler.begin_active(),
+//     endc = dof_handler.end();
   
-  for (; cell!=endc; ++cell)
-    {
-      // Only Refine the solid
-      if (cell->material_id() == solid_id)
-	cell->set_refine_flag();
-    }
+//   for (; cell!=endc; ++cell)
+//     {
+//       // Only Refine the solid
+//       if (cell->material_id() == solid_id)
+// 	cell->set_refine_flag();
+//     }
 
 
-  BlockVector<double> tmp_solution;
-  tmp_solution = solution;
+//   BlockVector<double> tmp_solution;
+//   tmp_solution = solution;
   
-  SolutionTransfer<dim, BlockVector<double> > solution_transfer (dof_handler);
+//   SolutionTransfer<dim, BlockVector<double> > solution_transfer (dof_handler);
   
-  triangulation.prepare_coarsening_and_refinement();
-  solution_transfer.prepare_for_coarsening_and_refinement(tmp_solution);
+//   triangulation.prepare_coarsening_and_refinement();
+//   solution_transfer.prepare_for_coarsening_and_refinement(tmp_solution);
   
-  triangulation.execute_coarsening_and_refinement ();
-  setup_system ();
+//   triangulation.execute_coarsening_and_refinement ();
+//   setup_system ();
   
-  solution_transfer.interpolate(tmp_solution, solution); 
+//   solution_transfer.interpolate(tmp_solution, solution); 
 
-}
+// }
 
 
 
@@ -3209,12 +3267,12 @@ void FSI_ALE_Problem<dim>::run ()
   const unsigned int output_skip = 1;
 
 
-  unsigned int refine_mesh_1st = 1;
-  unsigned int refine_mesh_2nd = 2;
-  unsigned int refine_mesh_3rd = 3;
+//   unsigned int refine_mesh_1st = 1;
+//   unsigned int refine_mesh_2nd = 2;
+//   unsigned int refine_mesh_3rd = 3;
 
-  unsigned int refinement_cycle = 0;
-  const bool mesh_refinement = false;
+//   unsigned int refinement_cycle = 0;
+//   const bool mesh_refinement = false;
 
 
   do
@@ -3243,18 +3301,18 @@ void FSI_ALE_Problem<dim>::run ()
 	    output_results (timestep_number,solution);
 
 
-      if (mesh_refinement && (timestep_number  == refine_mesh_1st ||
-			      timestep_number  == refine_mesh_2nd ||
-			      timestep_number  == refine_mesh_3rd))			      			      			     
-	  {
-	    std::cout << "Refinement cycle " 
-		          << refinement_cycle 
-		          << "\n================== "
-		          << std::endl;
+    //   if (mesh_refinement && (timestep_number  == refine_mesh_1st ||
+	// 		      timestep_number  == refine_mesh_2nd ||
+	// 		      timestep_number  == refine_mesh_3rd))			      			      			     
+	//   {
+	//     std::cout << "Refinement cycle " 
+	// 	          << refinement_cycle 
+	// 	          << "\n================== "
+	// 	          << std::endl;
 	  
-	    refine_mesh ();
-	    ++refinement_cycle;		
-	  }
+	//     refine_mesh ();
+	//     ++refinement_cycle;		
+	//   }
       
       ++timestep_number;
 
@@ -3273,8 +3331,8 @@ Utilities::MPI::MPI_InitFinalize mpi_initialization (argc, argv);
   try
     {
       deallog.depth_console (0);
-
-      FSI_ALE_Problem<2> flow_problem("step-fsi.prm");
+	  const unsigned int degree = 2;
+      FSI_ALE_Problem<2> flow_problem(degree);
       flow_problem.run ();
     }
   catch (std::exception &exc)
