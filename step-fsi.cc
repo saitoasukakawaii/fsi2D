@@ -888,7 +888,7 @@ private:
   // Boundary conditions (bc)
   void set_initial_bc (const double time);
   void set_newton_bc ();
-  void inlet_flow (const double t);
+  double inlet_flow (const double t);
   // Linear solver
   void solve ();
 
@@ -951,8 +951,8 @@ private:
   double force_structure_x, force_structure_y;
   
   double global_drag_lift_value;
-  SparseDirectMUMPS A_direct;
-
+//   SparseDirectMUMPS A_direct;
+// SparseDirectUMFPACK A_direct;
   unsigned int solid_id[3] = { 15,16,17 }; 
   unsigned int fluid_id = 14, 		   
 			   fixed_id = 20, 
@@ -1029,7 +1029,7 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
 
   // Timestepping schemes
   //BE, CN, CN_shifted
-//   time_stepping_scheme = parameters.time_stepping_scheme;
+  time_stepping_scheme = "CN_shifted";
 
   // Timestep size:
   // FSI 1: 1.0 (quasi-stationary)
@@ -1103,7 +1103,7 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
 	    << "Density structure:    "   <<  density_structure << "\n"  
 	    << "Viscosity fluid:      "   <<  viscosity << "\n"
 	    << "alpha_u:              "   <<  alpha_u << "\n"
-	    << "Lame coeff. mu:       "   <<  lame_coefficient_mu << "\n\n"
+	    << "Lame coeff. mu: "   << lame_mu[0] << " " << lame_mu[1] << " " << lame_mu[2] << "\n\n"
 		<< "time scheme:          "   <<  time_stepping_scheme << "\n"
 		<< "max timesteps:        "   <<  max_no_timesteps << "\n"
 		<< "length of time step:  "   <<  timestep << "\n"
@@ -1673,17 +1673,18 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 	} 
       else if (cell->material_id() == solid_id[0] || cell->material_id() == solid_id[1] || cell->material_id() == solid_id[2])
 	{	  
+		double lame_coefficient_mu, lame_coefficient_lambda;
 		 if (cell->material_id() == solid_id[0]){
-		 	double lame_coefficient_mu = lame_mu[0];
-			double lame_coefficient_lambda = lame_lambda[0];
+		 	lame_coefficient_mu = lame_mu[0];
+			lame_coefficient_lambda = lame_lambda[0];
 		 }
 		 if (cell->material_id() == solid_id[1]){
-		 	double lame_coefficient_mu = lame_mu[1];
-			double lame_coefficient_lambda = lame_lambda[1];
+		 	lame_coefficient_mu = lame_mu[1];
+			lame_coefficient_lambda = lame_lambda[1];
 		 }
 		if (cell->material_id() == solid_id[2]){
-		 	double lame_coefficient_mu = lame_mu[2];
-			double lame_coefficient_lambda = lame_lambda[2];
+		 	lame_coefficient_mu = lame_mu[2];
+			lame_coefficient_lambda = lame_lambda[2];
 		}
 	  for (unsigned int q=0; q<n_q_points; ++q)
 	    {	      
@@ -2112,18 +2113,19 @@ local_assemble_system_rhs (const typename DoFHandler<dim>::active_cell_iterator 
 	}   
       else if (cell->material_id() == solid_id[0] || cell->material_id() == solid_id[1] || cell->material_id() == solid_id[2])
 	{	  
+		 double lame_coefficient_mu, lame_coefficient_lambda;
 		 if (cell->material_id() == solid_id[0]){
-		 	double lame_coefficient_mu = lame_mu[0];
-			double lame_coefficient_lambda = lame_lambda[0];
+		 	lame_coefficient_mu = lame_mu[0];
+			lame_coefficient_lambda = lame_lambda[0];
 		 }
 		 if (cell->material_id() == solid_id[1]){
-		 	double lame_coefficient_mu = lame_mu[1];
-			double lame_coefficient_lambda = lame_lambda[1];
+		 	lame_coefficient_mu = lame_mu[1];
+			lame_coefficient_lambda = lame_lambda[1];
 		 }
 		if (cell->material_id() == solid_id[2]){
-		 	double lame_coefficient_mu = lame_mu[2];
-			double lame_coefficient_lambda = lame_lambda[2];
-		}	  
+		 	lame_coefficient_mu = lame_mu[2];
+			lame_coefficient_lambda = lame_lambda[2];
+		}  
 	  for (unsigned int q=0; q<n_q_points; ++q)
 	    {		 		 	      
 	      const Tensor<1,dim> v = ALE_Transformations
@@ -2272,7 +2274,7 @@ local_assemble_system_rhs (const typename DoFHandler<dim>::active_cell_iterator 
 
 // inlet fow profile
 template <int dim>
-void
+double 
 FSI_ALE_Problem<dim>::inlet_flow (const double t)
 {
 //   const long double pi = 3.141592653589793238462643;
@@ -2428,8 +2430,8 @@ FSI_ALE_Problem<dim>::solve ()
 //   SparseDirectUMFPACK A_direct;
 //   A_direct.factorize(system_matrix);     
 //   A_direct.vmult(sol,rhs); 
-//   SparseDirectMUMPS A_direct;
-//   A_direct.initialize (system_matrix);
+  SparseDirectMUMPS A_direct;
+  A_direct.initialize (system_matrix);
   A_direct.vmult(sol,rhs); 
   newton_update = sol;
   
@@ -2462,13 +2464,18 @@ void FSI_ALE_Problem<dim>::newton_iteration (const double time)
   
   // Application of the initial boundary conditions to the 
   // variational equations:
+  std::cout << "Setting initial_bc...\n" << std::endl;
   set_initial_bc (time);
+  std::cout << "Assembling rhs...\n" << std::endl;
   assemble_system_rhs();
 
   double newton_residuum = system_rhs.linfty_norm(); 
   double old_newton_residuum= newton_residuum;
   unsigned int newton_step = 1;
-   
+  // prevent call A_direct.sovle() before initialized.
+//    assemble_system_matrix ();
+//    A_direct.initialize (system_matrix);
+
   if (newton_residuum < lower_bound_newton_residuum)
     {
       std::cout << '\t' 
@@ -2476,7 +2483,9 @@ void FSI_ALE_Problem<dim>::newton_iteration (const double time)
 		<< newton_residuum 
 		<< std::endl;     
     }
-  
+
+  std::cout << "Start newton procedure...\n" << std::endl;
+
   while (newton_residuum > lower_bound_newton_residuum &&
 	 newton_step < max_no_newton_steps)
     {
@@ -2497,7 +2506,10 @@ void FSI_ALE_Problem<dim>::newton_iteration (const double time)
       if (newton_residuum/old_newton_residuum > nonlinear_rho)
 	{
 	  assemble_system_matrix ();
-	  A_direct.initialize (system_matrix);
+	  // using mumps
+	//   A_direct.initialize (system_matrix);
+	  // using UMFPACK
+  	//   A_direct.factorize(system_matrix);
 	}
 
       // Solve Ax = b
@@ -2539,6 +2551,7 @@ void FSI_ALE_Problem<dim>::newton_iteration (const double time)
       timer_newton.reset();
       newton_step++;      
     }
+	std::cout << "End newton procedure...\n" << std::endl;
 }
 
 // This function is known from almost all other 
