@@ -911,6 +911,26 @@ private:
   void compute_functional_values ();
   void compute_minimal_J();
 
+  // class to output F and E tensor
+  class Postprocessor : public DataPostprocessor<dim>
+  {
+    public:
+    //   Postprocessor ();
+      virtual
+      void
+      compute_derived_quantities_vector (const std::vector<Vector<double> >              &uh,
+                                         const std::vector<std::vector<Tensor<1,dim> > > &duh,
+                                         const std::vector<std::vector<Tensor<2,dim> > > &dduh,
+                                         const std::vector<Point<dim> >                  &normals,
+                                         const std::vector<Point<dim> >                  &evaluation_points,
+                                         std::vector<Vector<double> >                    &computed_quantities) const;
+      virtual std::vector<std::string> get_names () const;
+      virtual
+      std::vector<DataComponentInterpretation::DataComponentInterpretation>
+      get_data_component_interpretation () const;
+      virtual UpdateFlags get_needed_update_flags () const;
+  };
+
   // Local mesh refinement
 //   void refine_mesh();
  
@@ -985,6 +1005,99 @@ template <int dim>
 FSI_ALE_Problem<dim>::~FSI_ALE_Problem () 
 {}
 
+
+template <int dim>
+  void
+  FSI_ALE_Problem<dim>::Postprocessor::
+  compute_derived_quantities_vector (const std::vector<Vector<double> >              &uh,
+                                     const std::vector<std::vector<Tensor<1,dim> > > &duh,
+                                     const std::vector<std::vector<Tensor<2,dim> > > &/*dduh*/,
+                                     const std::vector<Point<dim> >                  &/*normals*/,
+                                     const std::vector<Point<dim> >                  &/*evaluation_points*/,
+                                     std::vector<Vector<double> >                    &computed_quantities) const
+  {
+    const unsigned int n_quadrature_points = uh.size();
+    Assert (duh.size() == n_quadrature_points,
+            ExcInternalError())
+
+    Assert (computed_quantities.size() == n_quadrature_points,
+            ExcInternalError());
+	// assert dim*2+1component
+    Assert (uh[0].size() == (dim+dim+1),
+            ExcInternalError());
+    
+    Assert (computed_quantities[0].size() == 10, ExcInternalError())
+    Tensor<2,dim> identity;
+	identity.clear();
+    identity[0][0] = 1.0;
+    identity[0][1] = 0.0;
+    identity[1][0] = 0.0;
+    identity[1][1] = 1.0;
+
+    for (unsigned int q=0; q<n_quadrature_points; ++q)
+      {
+		  Tensor<2, dim> F;
+		  F.clear();
+		  F[0][0] = duh[q][dim  ][0] + 1.0;
+		  F[0][1] = duh[q][dim  ][1];
+		  F[1][0] = duh[q][dim+1][0];
+		  F[1][1] = duh[q][dim+1][1] + 1.0;
+		  Tensor<2, dim> E;
+		  E.clear();
+		  E = transpose (F) * F - identity;
+		  double output_trace_E = trace(E);
+		  double output_J = determinant(F);
+		  computed_quantities[q](0) = F[0][0];
+		  computed_quantities[q](1) = F[0][1];
+		  computed_quantities[q](2) = F[1][0];
+		  computed_quantities[q](3) = F[1][1];
+		  computed_quantities[q](4) = E[0][0];
+		  computed_quantities[q](5) = E[0][1];
+		  computed_quantities[q](6) = E[1][0];
+		  computed_quantities[q](7) = E[1][1];
+		  computed_quantities[q](8) = output_trace_E;
+		  computed_quantities[q](9) = output_J;
+      }
+  }
+
+  template <int dim>
+  std::vector<std::string>
+  FSI_ALE_Problem<dim>::Postprocessor::
+  get_names () const
+  {
+    std::vector<std::string> names;
+    names.push_back ("Fxx");
+	names.push_back ("Fxy");
+	names.push_back ("Fyx");
+	names.push_back ("Fyy");
+	names.push_back ("Exx");
+	names.push_back ("Exy");
+	names.push_back ("Eyx");
+	names.push_back ("Eyy");
+	names.push_back ("trace_E");
+    names.push_back ("J");
+    return names;
+  }
+
+  template <int dim>
+  std::vector<DataComponentInterpretation::DataComponentInterpretation>
+  FSI_ALE_Problem<dim>::Postprocessor::
+  get_data_component_interpretation () const
+  {
+    std::vector<DataComponentInterpretation::DataComponentInterpretation>
+    interpretation (10,
+                    DataComponentInterpretation::component_is_scalar);
+ 
+    return interpretation;
+  }
+
+  template <int dim>
+  UpdateFlags
+  FSI_ALE_Problem<dim>::Postprocessor::
+  get_needed_update_flags () const
+  {
+    return update_values | update_gradients;
+  }
 
 // In this method, we set up runtime parameters that 
 // could also come from a paramter file. We propose
@@ -2324,6 +2437,9 @@ FSI_ALE_Problem<dim>::set_initial_bc (const double time)
     std::map<unsigned int,double> boundary_values;  
     std::vector<bool> component_mask (dim+dim+1, true);
     // (Scalar) pressure
+	// vx vy ux uy p
+	//  1  1  1  0 0
+	component_mask[dim+1] = false; 
     component_mask[dim+dim] = false;  
 	// inlet boundary 
     VectorTools::interpolate_boundary_values (dof_handler,
@@ -2331,29 +2447,37 @@ FSI_ALE_Problem<dim>::set_initial_bc (const double time)
 						BoundaryParabel<dim>(time, inflow_velocity),
 						boundary_values,
 						component_mask);    
-
+	// vx vy ux uy p
+	//  0  1  0  1 0
 	// symmetry boundary
 	component_mask[0]   = false; // vx
     component_mask[dim] = false; // ux
+	component_mask[dim+1] = true; // uy
     VectorTools::interpolate_boundary_values (dof_handler,
 						symmetry_id,
 						ZeroFunction<dim>(dim+dim+1),  
 						boundary_values,
 						component_mask);
-
+	// vx vy ux uy p
+	//  1  0  1  0 0
 	// fixed boundary
-	// vy and uv may not need to be fixed
+	// vy and uv do not fix
 	component_mask[0]   = true;  // vx
+	component_mask[1]   = false;  // vy
     component_mask[dim] = true;  // ux 
+	component_mask[dim+1]   = false;  // uy
     VectorTools::interpolate_boundary_values (dof_handler,
 						fixed_id,
 						ZeroFunction<dim>(dim+dim+1),  
 						boundary_values,
 						component_mask);
-    
+    // vx vy ux uy p
+	//  0  0  1  0 0
     // outlet boundary
-    component_mask[0] = false;
-    component_mask[1] = false;   
+    component_mask[0] = false;		// vx
+    component_mask[1] = false; 		// vy
+	component_mask[dim] = true;  	// ux 
+	// component_mask[dim+1]   = true;  // uy  
     VectorTools::interpolate_boundary_values (dof_handler,
 						outlet_id,
 						ZeroFunction<dim>(dim+dim+1),  
@@ -2378,41 +2502,52 @@ void
 FSI_ALE_Problem<dim>::set_newton_bc ()
 {
     std::vector<bool> component_mask (dim+dim+1, true);
+	component_mask[dim+1]   = false;  // uy
     component_mask[dim+dim] = false;  // p
-
+	// vx vy ux uy p
+	//  1  1  1  0 0
     // inlet boundary
     VectorTools::interpolate_boundary_values (dof_handler,
 						  inlet_id,
 						  ZeroFunction<dim>(dim+dim+1),                                             
 						  constraints,
 						  component_mask);
-
+	// vx vy ux uy p
+	//  0  1  0  1 0
 	// symmetry boundary
 	component_mask[0]   = false; // vx 
     component_mask[dim] = false; // ux
+	component_mask[dim+1] = true;  // uy
     VectorTools::interpolate_boundary_values (dof_handler,
 						  symmetry_id,
 					      ZeroFunction<dim>(dim+dim+1),  
 						  constraints,
 						  component_mask);
-    
+	// vx vy ux uy p
+	//  1  0  1  0 0
     // fixed boundary
-	component_mask[0]   = true; // vx 
-	component_mask[dim] = true; // ux
+	// vy and uv do not fix
+	component_mask[0]   = true;  // vx
+	component_mask[1]   = false;  // vy
+    component_mask[dim] = true;  // ux 
+	component_mask[dim+1]   = false;  // uy
     VectorTools::interpolate_boundary_values (dof_handler,
-					      fixed_id,
-					      ZeroFunction<dim>(dim+dim+1),  
-					      constraints,
-					      component_mask);  
-
+						fixed_id,
+						ZeroFunction<dim>(dim+dim+1),  
+						constraints,
+						component_mask);
+    // vx vy ux uy p
+	//  0  0  1  0 0
     // outlet boundary
-    component_mask[0] = false;
-    component_mask[1] = false;
+    component_mask[0] = false;		// vx
+    component_mask[1] = false; 		// vy
+	component_mask[dim] = true;  	// ux 
+	// component_mask[dim+1]   = true;  // uy  
     VectorTools::interpolate_boundary_values (dof_handler,
-					      outlet_id,
-					      ZeroFunction<dim>(dim+dim+1),  
-					      constraints,
-					      component_mask);
+						outlet_id,
+						ZeroFunction<dim>(dim+dim+1),  
+						constraints,
+						component_mask);
 }  
 
 // In this function, we solve the linear systems
@@ -2561,6 +2696,7 @@ void
 FSI_ALE_Problem<dim>::output_results (const unsigned int time_step,
 			      const BlockVector<double> output_vector)  const
 {
+  Postprocessor postprocessor;
 
   std::vector<std::string> solution_names; 
   solution_names.push_back ("x_velo");
@@ -2575,12 +2711,48 @@ FSI_ALE_Problem<dim>::output_results (const unsigned int time_step,
 
 
   DataOut<dim> data_out;
-  data_out.attach_dof_handler (dof_handler);  
-   
+  data_out.attach_dof_handler (dof_handler); 
+
   data_out.add_data_vector (output_vector, solution_names,
 			    DataOut<dim>::type_dof_data,
 			    data_component_interpretation);
-  
+
+  data_out.add_data_vector (output_vector, postprocessor);
+  // get cell stress
+//   Vector<double> major_principle_stress(triangulation.n_active_cells());
+//   Vector<double> minor_principle_stress(triangulation.n_active_cells());
+//   Vector<double> von_mises_stress(triangulation.n_active_cells());
+//   {
+// 	for (auto &cell : triangulation.active_cell_iterators())
+// 	if (cell->material_id() == solid_id[0] || cell->material_id() == solid_id[1] || cell->material_id() == solid_id[2])
+// 	{	  
+// 		 double lame_coefficient_mu, lame_coefficient_lambda;
+// 		 if (cell->material_id() == solid_id[0]){
+// 		 	lame_coefficient_mu = lame_mu[0];
+// 			lame_coefficient_lambda = lame_lambda[0];
+// 		 }
+// 		 if (cell->material_id() == solid_id[1]){
+// 		 	lame_coefficient_mu = lame_mu[1];
+// 			lame_coefficient_lambda = lame_lambda[1];
+// 		 }
+// 		if (cell->material_id() == solid_id[2]){
+// 		 	lame_coefficient_mu = lame_mu[2];
+// 			lame_coefficient_lambda = lame_lambda[2];
+// 		}  
+// 			{
+// 			SymmetricTensor<2, dim> accumulated_stress;
+// 			for (unsigned int q = 0; q < quadrature_formula.size(); ++q)
+// 				accumulated_stress +=
+// 				reinterpret_cast<PointHistory<dim> *>(cell->user_pointer())[q]
+// 					.old_stress;
+// 			norm_of_stress(cell->active_cell_index()) =
+// 				(accumulated_stress / quadrature_formula.size()).norm();
+// 			}
+// 		else
+// 			norm_of_stress(cell->active_cell_index()) = -1e+20;
+// 	}
+//   data_out.add_data_vector(major_principle_stress, "major_principle_stress");
+//   data_out.add_data_vector(major_principle_stress, "major_principle_stress");
   data_out.build_patches ();
 
   std::string filename_basis;
@@ -2594,10 +2766,10 @@ FSI_ALE_Problem<dim>::output_results (const unsigned int time_step,
   std::cout << std::endl;
   filename << filename_basis
 	   << Utilities::int_to_string (time_step, 5)
-	   << ".vtk";
+	   << ".vtu";
   
   std::ofstream output (filename.str().c_str());
-  data_out.write_vtk (output);
+  data_out.write_vtu (output);
 
 }
 
