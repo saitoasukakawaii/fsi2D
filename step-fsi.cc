@@ -961,9 +961,10 @@ private:
   
   // Structure parameters
   double density_structure; 
-  double lame_mu[3], lame_lambda[3];
+  double lame_mu[4], lame_lambda[4];
   double poisson_ratio_nu;  
-
+	double density_poro;
+	double kappa;
   // Other parameters to control the fluid mesh motion 
   double cell_diameter;  
   double alpha_u;
@@ -973,12 +974,12 @@ private:
   double global_drag_lift_value;
 //   SparseDirectMUMPS A_direct;
 // SparseDirectUMFPACK A_direct;
-  unsigned int solid_id[3] = { 15,16,17 }; 
-  unsigned int fluid_id = 14, 		   
-			   fixed_id = 20, 
-			   inlet_id = 18, 
-			   outlet_id= 19,
-			   symmetry_id = 21;
+  unsigned int solid_id[4] = { 2,3,4,5 }; 
+  unsigned int fluid_id = 1, 		   
+			   fixed_id = 6, 
+			   inlet_id = 7, 
+			   outlet_id= 9,
+			   symmetry_id = 10;
   
 };
 
@@ -1117,9 +1118,10 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
   // Structure parameters
   // FSI 1 & 2: 0.5e+6; FSI 3: 2.0e+6
   double E[3];
-  E[0] = 2e+6;
-  E[1] = 6e+6;
-  E[2] = 4e+6; 
+  E[0] = 2.e+6;
+  E[1] = 6.e+6;
+  E[2] = 4.e+6; 
+	E[3] = 5.e+6;
 
   poisson_ratio_nu = 0.45; 
 
@@ -1130,7 +1132,13 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
 	  lame_mu[i] = E[i]/tmp2;
 	  lame_lambda[i]= E[i]/tmp1;
   }
-  
+	double nu_poro = 0.49;
+	tmp1 = nu_poro/((1+nu_poro)*(1-2*nu_poro));
+	tmp2 = 2*(1+nu_poro);
+  lame_mu[3] = E[3]/tmp2;
+	lame_lambda[3]= E[3]/tmp1;
+	density_poro = 1.3e+3; 				// kg/m^3
+	kappa = 1e-13;  							// m^3 s kg^{-1}
   // Force on beam
   force_structure_x = 0; 
   force_structure_y = 0; 
@@ -1510,7 +1518,8 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
   // Declaring test functions:
   std::vector<Tensor<1,dim> > phi_i_v (dofs_per_cell); 
   std::vector<Tensor<2,dim> > phi_i_grads_v(dofs_per_cell);
-  std::vector<double>         phi_i_p(dofs_per_cell);   
+  std::vector<double>         phi_i_p(dofs_per_cell); 
+	std::vector<Tensor<1,dim> > phi_i_grads_p (dofs_per_cell);   
   std::vector<Tensor<1,dim> > phi_i_u (dofs_per_cell); 
   std::vector<Tensor<2,dim> > phi_i_grads_u(dofs_per_cell);
 
@@ -1825,7 +1834,6 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 	      
 	      const double tr_E = Structure_Terms_in_ALE
 		::get_tr_E<dim> (E);
-std::vector<unsigned int> local_dof_indices (dofs_per_cell);
 	      	      
 	      for (unsigned int i=0; i<dofs_per_cell; ++i)
 		{	    	     		
@@ -1881,6 +1889,137 @@ std::vector<unsigned int> local_dof_indices (dofs_per_cell);
 	// 					  system_matrix);
 	  // end if (second PDE: STVK material)  
 	} 
+	 else if (cell->material_id() == solid_id[3] )
+	{	  
+		double lame_coefficient_mu, lame_coefficient_lambda;
+		 
+		 	lame_coefficient_mu = lame_mu[3];
+			lame_coefficient_lambda = lame_lambda[3];
+	
+	  for (unsigned int q=0; q<n_q_points; ++q)
+	    {	      
+	      for (unsigned int k=0; k<dofs_per_cell; ++k)
+		{
+		  phi_i_v[k]       = scratch_data.fe_values[velocities].value (k, q);
+		  phi_i_grads_v[k] = scratch_data.fe_values[velocities].gradient (k, q);
+		  phi_i_p[k]       = scratch_data.fe_values[pressure].value (k, q);		
+			phi_i_grads_p[k] = scratch_data.fe_values[pressure].gradient (k, q);		  
+		  phi_i_u[k]       = scratch_data.fe_values[displacements].value (k, q);
+		  phi_i_grads_u[k] = scratch_data.fe_values[displacements].gradient (k, q);
+		}
+	      
+	      // It is here the same as already shown for the fluid equations.
+	      // First, we prepare things coming from the previous Newton
+	      // iteration...
+
+				const Tensor<2,dim> pI = ALE_Transformations		
+		::get_pI<dim> (q, old_solution_values);
+
+				const Tensor<1,dim> grad_P = ALE_Transformations
+		::get_grad_p (q, old_solution_grads);
+
+	      const Tensor<2,dim> F = ALE_Transformations
+		::get_F<dim> (q, old_solution_grads);
+	      
+	      const Tensor<2,dim> F_T = ALE_Transformations
+		::get_F_T<dim> (F);
+
+	      const Tensor<2,dim> F_Inverse = ALE_Transformations
+		::get_F_Inverse<dim> (F);
+	      
+	      const Tensor<2,dim> F_Inverse_T = ALE_Transformations
+		::get_F_Inverse_T<dim> (F_Inverse);
+
+				const double J = ALE_Transformations
+		::get_J<dim> (F);
+
+	      const Tensor<2,dim> E = Structure_Terms_in_ALE 
+		::get_E<dim> (F_T, F, Identity);
+	      
+	      const double tr_E = Structure_Terms_in_ALE
+		::get_tr_E<dim> (E);
+	      	      
+	      for (unsigned int i=0; i<dofs_per_cell; ++i)
+		{	    
+			const double J_LinU =  ALE_Transformations
+		    ::get_J_LinU<dim> (q, old_solution_grads, phi_i_grads_u[i]);
+				
+			const Tensor<2,dim> F_Inverse_LinU = ALE_Transformations
+		    ::get_F_Inverse_LinU (phi_i_grads_u[i], J, J_LinU, q, old_solution_grads);
+
+			const Tensor<2,dim> J_F_Inverse_T_LinU = ALE_Transformations
+		    ::get_J_F_Inverse_T_LinU<dim> (phi_i_grads_u[i]);
+
+			const Tensor<2,dim> pI_LinP = ALE_Transformations
+		    ::get_pI_LinP<dim> (phi_i_p[i]);
+
+		  const Tensor<2,dim> F_LinU = ALE_Transformations		  
+		    ::get_F_LinU<dim> (phi_i_grads_u[i]);
+
+		  const Tensor<1,dim> grad_P_LinP = ALE_Transformations
+			  ::get_grad_p_LinP (phi_i_grads_p[i]);	
+		     		       
+		  // STVK: Green-Lagrange strain tensor derivatives
+		  const Tensor<2,dim> E_LinU = 0.5 * (transpose(F_LinU) * F + transpose(F) * F_LinU);
+		  
+		  const double tr_E_LinU = Structure_Terms_in_ALE
+		    ::get_tr_E_LinU<dim> (q,old_solution_grads, phi_i_grads_u[i]);
+		  
+			const Tensor<2,dim>  stress_poro_ALE_1st_term_LinAll = NSE_in_ALE			
+		    ::get_stress_fluid_ALE_1st_term_LinAll<dim> 
+		    (pI, F_Inverse_T, J_F_Inverse_T_LinU, pI_LinP, J);
+		       
+			const double incompressibility_ALE_LinAll = NSE_in_ALE
+		    ::get_Incompressibility_ALE_LinAll<dim> 
+		    (phi_i_grads_v[i], phi_i_grads_u[i], q, old_solution_grads); 
+
+			const Tensor<1,dim> grad_p_LinAll = NSE_in_ALE
+			::get_gradP_ALE_LinAll<dim>(J, grad_P, grad_P_LinP, F_Inverse, F_Inverse_T, 
+		     F_Inverse_LinU, J_F_Inverse_T_LinU);
+		  // STVK
+		  // Piola-kirchhoff stress structure STVK linearized in all directions 		  
+		  Tensor<2,dim> piola_kirchhoff_stress_structure_STVK_LinALL;
+		  piola_kirchhoff_stress_structure_STVK_LinALL = lame_coefficient_lambda * 
+		    (F_LinU * tr_E * Identity + F * tr_E_LinU * Identity) 
+		    + 2 * lame_coefficient_mu * (F_LinU * E + F * E_LinU);
+		       
+			   
+		  for (unsigned int j=0; j<dofs_per_cell; ++j)
+		    {
+		      // STVK 
+		      const unsigned int comp_j = fe.system_to_component_index(j).first; 
+		      if (comp_j == 0 || comp_j == 1)
+			{
+			  copy_data.cell_matrix(j,i) += (density_structure * phi_i_v[i] * phi_i_v[j] + 
+				    timestep * scalar_product(stress_poro_ALE_1st_term_LinAll, phi_i_grads_v[j])	+			
+						timestep * theta * scalar_product(piola_kirchhoff_stress_structure_STVK_LinALL, 
+										  phi_i_grads_v[j]) 
+						) * scratch_data.fe_values.JxW(q);      	
+			}		     
+		      else if (comp_j == 2 || comp_j == 3)
+			{
+			  copy_data.cell_matrix(j,i) += (density_structure * 
+						(phi_i_u[i] * phi_i_u[j] - timestep * theta * phi_i_v[i] * phi_i_u[j])						
+						) *  scratch_data.fe_values.JxW(q);			  
+			}
+		      else if (comp_j == 4)
+			{
+			  copy_data.cell_matrix(j,i) += ( incompressibility_ALE_LinAll * phi_i_p[j] 
+																			+ kappa * grad_p_LinAll * phi_i_grads_p[j]
+																			) * scratch_data.fe_values.JxW(q);      
+			}
+		      // end j dofs
+		    }  
+		  // end i dofs		     
+		}   
+	      // end n_q_points 
+	    }    
+
+	// cell->get_dof_indices (copy_data.local_dof_indices);
+	//   constraints.distribute_local_to_global (local_matrix, local_dof_indices,
+	// 					  system_matrix);
+	  // end if (second PDE: STVK-poro material)  
+	}
       // end cell
 }
 
@@ -2381,6 +2520,181 @@ local_assemble_system_rhs (const typename DoFHandler<dim>::active_cell_iterator 
 	  
 	// end if (for STVK material)  
 	}   
+	 else if (cell->material_id() == solid_id[3])
+	{	  
+		 double lame_coefficient_mu, lame_coefficient_lambda;
+		 
+		 	lame_coefficient_mu = lame_mu[3];
+			lame_coefficient_lambda = lame_lambda[3];
+
+	  for (unsigned int q=0; q<n_q_points; ++q)
+	    {		 		 	      
+	      const Tensor<1,dim> v = ALE_Transformations
+		::get_v<dim> (q, old_solution_values);
+	      
+	      const Tensor<1,dim> u = ALE_Transformations
+		::get_u<dim> (q, old_solution_values);
+	      
+				const Tensor<2,dim> pI = ALE_Transformations
+		::get_pI<dim> (q, old_solution_values);
+
+				const Tensor<1,dim> grad_P = ALE_Transformations
+		::get_grad_p<dim> (q, old_solution_grads);
+
+	      const Tensor<2,dim> F = ALE_Transformations
+		::get_F<dim> (q, old_solution_grads);
+	      
+	      const Tensor<2,dim> F_T = ALE_Transformations
+		::get_F_T<dim> (F);
+	      
+	      const Tensor<2,dim> Identity = ALE_Transformations
+		::get_Identity<dim> ();
+	      
+	      const Tensor<2,dim> F_Inverse = ALE_Transformations
+		::get_F_Inverse<dim> (F);
+	      
+	      const Tensor<2,dim> F_Inverse_T = ALE_Transformations
+		::get_F_Inverse_T<dim> (F_Inverse);
+	      
+	      const double J = ALE_Transformations
+		::get_J<dim> (F);
+	      
+	      const Tensor<2,dim> E = Structure_Terms_in_ALE
+		::get_E<dim> (F_T, F, Identity);
+	      
+	      const double tr_E = Structure_Terms_in_ALE
+		::get_tr_E<dim> (E);
+	      
+	      // Previous time step values
+	      const Tensor<1,dim> old_timestep_v = ALE_Transformations
+		::get_v<dim> (q, old_timestep_solution_values);
+	      
+	      const Tensor<1,dim> old_timestep_u = ALE_Transformations
+		::get_u<dim> (q, old_timestep_solution_values);
+
+	  //     const Tensor<2,dim> old_timestep_pI = ALE_Transformations
+		// ::get_pI<dim> (q, old_timestep_solution_values);
+
+	      const Tensor<2,dim> old_timestep_F = ALE_Transformations
+		::get_F<dim> (q, old_timestep_solution_grads);
+	      
+	      const Tensor<2,dim> old_timestep_F_Inverse = ALE_Transformations
+		::get_F_Inverse<dim> (old_timestep_F);
+	      
+	      const Tensor<2,dim> old_timestep_F_T = ALE_Transformations
+		::get_F_T<dim> (old_timestep_F);
+	      
+	      const Tensor<2,dim> old_timestep_F_Inverse_T = ALE_Transformations
+		::get_F_Inverse_T<dim> (old_timestep_F_Inverse);
+	      
+	      const double old_timestep_J = ALE_Transformations
+		::get_J<dim> (old_timestep_F);
+	      
+	      const Tensor<2,dim> old_timestep_E = Structure_Terms_in_ALE
+		::get_E<dim> (old_timestep_F_T, old_timestep_F, Identity);
+	      
+	      const double old_timestep_tr_E = Structure_Terms_in_ALE
+		::get_tr_E<dim> (old_timestep_E);
+	      
+	      
+	      // STVK structure model
+	      Tensor<2,dim> sigma_structure_ALE;
+	      sigma_structure_ALE.clear();
+	      sigma_structure_ALE = (1.0/J *
+				     F * (lame_coefficient_lambda * tr_E * Identity +
+					  2 * lame_coefficient_mu * E) * F_T);
+	      
+	      
+	      Tensor<2,dim> stress_term;
+	      stress_term.clear();
+	      stress_term = (J * sigma_structure_ALE * F_Inverse_T);
+
+	      Tensor<2,dim> poro_pressure;
+	      poro_pressure.clear();
+	      poro_pressure = (-pI * J * F_Inverse_T);
+
+	      Tensor<2,dim> old_timestep_sigma_structure_ALE;
+	      old_timestep_sigma_structure_ALE.clear();
+	      old_timestep_sigma_structure_ALE = (1.0/old_timestep_J *
+						  old_timestep_F * (lame_coefficient_lambda *
+								    old_timestep_tr_E * Identity +
+								    2 * lame_coefficient_mu *
+								    old_timestep_E) * 
+						  old_timestep_F_T);
+	      
+	      Tensor<2,dim> old_timestep_stress_term;
+	      old_timestep_stress_term.clear();
+	      old_timestep_stress_term = (old_timestep_J * old_timestep_sigma_structure_ALE * old_timestep_F_Inverse_T);
+	      	
+				// Tensor<2,dim> old_timestep_poro_pressure;
+	      // old_timestep_poro_pressure.clear();
+	      // old_timestep_poro_pressure = (-old_timestep_pI * old_timestep_J * old_timestep_F_Inverse_T);
+
+				// Divergence of the poro in the ALE formulation
+	      const double incompressiblity_poro = NSE_in_ALE
+		::get_Incompressibility_ALE<dim> (q, old_solution_grads);
+
+	      // // Attention: normally no time
+	      // Tensor<1,dim> structure_force;
+	      // structure_force.clear();
+	      // structure_force[0] = density_structure * force_structure_x;
+	      // structure_force[1] = density_structure * force_structure_y;
+	      
+	      // Tensor<1,dim> old_timestep_structure_force;
+	      // old_timestep_structure_force.clear();
+	      // old_timestep_structure_force[0] = density_structure * force_structure_x;
+	      // old_timestep_structure_force[1] = density_structure * force_structure_y;
+	    
+      
+	      for (unsigned int i=0; i<dofs_per_cell; ++i)
+		{
+		  // STVK structure model
+		  const unsigned int comp_i = fe.system_to_component_index(i).first; 
+		  if (comp_i == 0 || comp_i == 1)
+		    { 
+		      const Tensor<1,dim> phi_i_v = scratch_data.fe_values[velocities].value (i, q);
+		      const Tensor<2,dim> phi_i_grads_v = scratch_data.fe_values[velocities].gradient (i, q);
+		      
+		      copy_data.cell_rhs(i) -= (density_poro * (v - old_timestep_v) * phi_i_v +
+							 timestep * scalar_product(poro_pressure,phi_i_grads_v) +  
+				      //  timestep * (1.0-theta) * scalar_product(old_timestep_poro_pressure, phi_i_grads_v) +
+				       timestep * theta * scalar_product(stress_term,phi_i_grads_v) +  
+				       timestep * (1.0-theta) * scalar_product(old_timestep_stress_term, phi_i_grads_v) 
+				      //  - timestep * theta * structure_force * phi_i_v   
+				      //  - timestep * (1.0 - theta) * old_timestep_structure_force * phi_i_v 
+				       ) * scratch_data.fe_values.JxW(q);    
+		      
+		    }		
+		  else if (comp_i == 2 || comp_i == 3)
+		    {
+		      const Tensor<1,dim> phi_i_u = scratch_data.fe_values[displacements].value (i, q);
+		      copy_data.cell_rhs(i) -=  (density_poro * 
+					((u - old_timestep_u) * phi_i_u -
+					 timestep * (theta * v + (1.0-theta) * 
+						     old_timestep_v) * phi_i_u)
+					) * scratch_data.fe_values.JxW(q);    
+		      
+		    }
+		  else if (comp_i == 4)
+		    {
+		      const double phi_i_p = scratch_data.fe_values[pressure].value (i, q);
+					const Tensor<1,dim> phi_i_grads_p = scratch_data.fe_values[pressure].gradient (i, q);
+		      copy_data.cell_rhs(i) -= ( incompressiblity_poro * phi_i_p +
+																	kappa * grad_P * phi_i_grads_p
+																	) * scratch_data.fe_values.JxW(q);  
+		      
+		    }
+		  // end i	  
+		} 	
+	      // end n_q_points 		   
+	    } 
+	  
+	//   cell->get_dof_indices (copy_data.local_dof_indices);
+	//   constraints.distribute_local_to_global (local_rhs, local_dof_indices,
+	// 					  system_rhs);
+	  
+	// end if (for STVK poro-material)  
+	}
       
 }
 
