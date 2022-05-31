@@ -11,6 +11,21 @@ namespace ALE_Transformations
   template <int dim> 
     inline
     Tensor<2,dim> 
+    get_Rotation_PI_half ()
+    {
+      Tensor<2,dim> tmp;
+      tmp.clear();
+      tmp[0][0] =  0.;
+      tmp[1][1] =  0.;
+      tmp[0][1] =  -1;
+      tmp[1][0] =   1;
+      
+      return tmp;      
+    }
+
+  template <int dim> 
+    inline
+    Tensor<2,dim> 
     get_pI (unsigned int q,
 	    std::vector<Vector<double> > old_solution_values)
     {
