@@ -1097,7 +1097,7 @@ compute_derived_quantities_vector (const std::vector<Vector<double> >           
 		F[1][1] = duh[q][dim+1][1] + 1.0;
 		Tensor<2, dim> E;
 		E.clear();
-		E = transpose (F) * F - identity;
+		E = 0.5 * (transpose (F) * F - identity);
 		double output_trace_E = trace(E);
 		double output_J = determinant(F);
 		computed_quantities[q](0) = F[0][0];
