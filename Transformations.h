@@ -446,6 +446,22 @@ get_Incompressibility_ALE_LinAll (const Tensor<2,dim> phi_i_grads_v,
 }
 
 
+template <int dim> 
+inline
+Tensor<1,dim>
+get_gradP_ALE_LinAll (const double J, const Tensor<1,dim> grad_P, 
+          const Tensor<1,dim> grad_P_LinP, 
+          const Tensor<2,dim> F_Inverse,
+				  const Tensor<2,dim> F_Inverse_T,
+				  const Tensor<2,dim> F_Inverse_LinU,
+				  const Tensor<2,dim> J_F_Inverse_T_LinU)
+{
+  return ( 
+    J * ( grad_P_LinP * F_Inverse + grad_P * F_Inverse_LinU ) * F_Inverse_T 
+  + ( grad_P * F_Inverse ) * J_F_Inverse_T_LinU
+  );
+}	
+
   template <int dim> 
   inline
   Tensor<1,dim> 
