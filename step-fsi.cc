@@ -57,7 +57,8 @@
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/tria_accessor.h>
 #include <deal.II/grid/tria_iterator.h>
-#include <deal.II/grid/tria_boundary_lib.h>
+// #include <deal.II/grid/tria_boundary_lib.h>
+#include <deal.II/grid/manifold_lib.h>
 #include <deal.II/grid/grid_tools.h>
 #include <deal.II/grid/grid_in.h>
 
@@ -65,7 +66,8 @@
 #include <deal.II/dofs/dof_renumbering.h>
 #include <deal.II/dofs/dof_accessor.h>
 #include <deal.II/dofs/dof_tools.h>
-#include <deal.II/lac/constraint_matrix.h>
+// #include <deal.II/lac/constraint_matrix.h>
+#include <deal.II/lac/affine_constraints.h>
 
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_dgq.h>
@@ -913,7 +915,8 @@ private:
   FESystem<dim>        fe;
   DoFHandler<dim>      dof_handler;
 
-  ConstraintMatrix     constraints;
+  // ConstraintMatrix     constraints;
+  AffineConstraints<double>    constraints; 
   
   BlockSparsityPattern      sparsity_pattern; 
   BlockSparseMatrix<double> system_matrix; 
@@ -943,8 +946,8 @@ private:
   double force_structure_x, force_structure_y;
   
   double global_drag_lift_value;
-  SparseDirectMUMPS A_direct;
-
+  //SparseDirectMUMPS A_direct;
+  SparseDirectUMFPACK A_direct;
   unsigned int fluid_id, solid_id, fixed_id, inlet_id, outlet_id;
   
 };
@@ -1070,12 +1073,20 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
 // 	std::cout << ".inp mesh file, using 'read_ucd' to read mesh..." << std::endl;
   grid_in.read_ucd (input_file); 
   
-  Point<dim> p(0.2, 0.2);
-  double radius = 0.05;
-  static const HyperBallBoundary<dim> boundary(p,radius);
-  triangulation.set_boundary (80, boundary);
-  triangulation.set_boundary (81, boundary);
+//   Point<dim> p(0.2, 0.2);
+//   double radius = 0.05;
+//   static const HyperBallBoundary<dim> boundary(p,radius);
+//   triangulation.set_boundary (80, boundary);
+//   triangulation.set_boundary (81, boundary);
     
+  Point<dim> p(0.2, 0.2);
+  const SphericalManifold<dim> boundary(p);
+  triangulation.set_all_manifold_ids_on_boundary(80,8);
+  triangulation.set_all_manifold_ids_on_boundary(81,9);
+  triangulation.set_manifold (8, boundary);
+  triangulation.set_manifold (9, boundary);
+
+
   triangulation.refine_global (parameters.no_of_refinements); 
  
   std::cout << "\n==============================" 
@@ -1101,7 +1112,7 @@ void FSI_ALE_Problem<dim>::set_runtime_parameters ()
 template <int dim>
 void FSI_ALE_Problem<dim>::setup_system ()
 {
-  timer.enter_section("Setup system.");
+  TimerOutput::Scope t(timer, "setup");
 
   system_matrix.clear ();
   
@@ -1131,7 +1142,9 @@ void FSI_ALE_Problem<dim>::setup_system ()
   constraints.close ();
   
   std::vector<unsigned int> dofs_per_block (3);
-  DoFTools::count_dofs_per_block (dof_handler, dofs_per_block, block_component);  
+  // DoFTools::count_dofs_per_block (dof_handler, dofs_per_block, block_component); 
+  dofs_per_block = DoFTools::count_dofs_per_fe_block (dof_handler, block_component);
+   
   const unsigned int n_v = dofs_per_block[0],
     n_u = dofs_per_block[1],
     n_p =  dofs_per_block[2];
@@ -1148,7 +1161,8 @@ void FSI_ALE_Problem<dim>::setup_system ()
  
       
  {
-    BlockCompressedSimpleSparsityPattern csp (3,3);
+    // BlockCompressedSimpleSparsityPattern csp (3,3);
+	BlockDynamicSparsityPattern csp (3,3);
 
     csp.block(0,0).reinit (n_v, n_v);
     csp.block(0,1).reinit (n_v, n_u);
@@ -1205,7 +1219,6 @@ void FSI_ALE_Problem<dim>::setup_system ()
 
   system_rhs.collect_sizes ();
 
-  timer.exit_section(); 
 }
 
 
@@ -1272,7 +1285,7 @@ FSI_ALE_Problem<dim>::copy_local_to_global_rhs (const AssemblyRhsCopyData &copy_
 template <int dim>
 void FSI_ALE_Problem<dim>::assemble_system_matrix ()
 {
-  timer.enter_section("Assemble Matrix.");
+  TimerOutput::Scope t(timer, "Assemble Matrix.");
   system_matrix=0;
   WorkStream::run(dof_handler.begin_active(),
                   dof_handler.end(),
@@ -1281,7 +1294,7 @@ void FSI_ALE_Problem<dim>::assemble_system_matrix ()
                   &FSI_ALE_Problem::copy_local_to_global_matrix,
                   AssemblyScratchData(fe,degree),
                   AssemblyMatrixCopyData());
-  timer.exit_section();
+
 }
 
 
@@ -1289,7 +1302,7 @@ void FSI_ALE_Problem<dim>::assemble_system_matrix ()
 template <int dim>
 void FSI_ALE_Problem<dim>::assemble_system_rhs ()
 {
-  timer.enter_section("Assemble Rhs.");
+  TimerOutput::Scope t(timer, "Assemble Rhs.");
   system_rhs=0;
   WorkStream::run(dof_handler.begin_active(),
                   dof_handler.end(),
@@ -1298,7 +1311,6 @@ void FSI_ALE_Problem<dim>::assemble_system_rhs ()
                   &FSI_ALE_Problem::copy_local_to_global_rhs,
                   AssemblyScratchData(fe,degree),
                   AssemblyRhsCopyData());
-  timer.exit_section();
 }
 
 // In this function, we assemble the Jacobian matrix
@@ -1569,7 +1581,7 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 	  for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
 	    {
 	      if (cell->face(face)->at_boundary() &&		  
-		  (cell->face(face)->boundary_indicator() == outlet_id) 
+		  (cell->face(face)->boundary_id() == outlet_id)   // boundary_indicator boundary_id
 		  )
 		{
 		  
@@ -1975,7 +1987,7 @@ local_assemble_system_rhs (const typename DoFHandler<dim>::active_cell_iterator 
 	  for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
 	    {
 	      if (cell->face(face)->at_boundary() && 		  
-		  (cell->face(face)->boundary_indicator() == outlet_id) 
+		  (cell->face(face)->boundary_id() == outlet_id) // boundary_indicator boundary_id
 		  )
 		{
 		  
@@ -2262,14 +2274,14 @@ FSI_ALE_Problem<dim>::set_initial_bc (const double time)
     component_mask[dim] = false; // ux
     VectorTools::interpolate_boundary_values (dof_handler,
                                               2,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
                                               boundary_values,
                                               component_mask);
 
 
     VectorTools::interpolate_boundary_values (dof_handler,
                                               3,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
                                               boundary_values,
                                               component_mask);
 
@@ -2277,13 +2289,13 @@ FSI_ALE_Problem<dim>::set_initial_bc (const double time)
     component_mask[dim] = true;  // ux 
     VectorTools::interpolate_boundary_values (dof_handler,
 					      80,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
 					      boundary_values,
 					      component_mask);
     
     VectorTools::interpolate_boundary_values (dof_handler,
 					      81,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
 					      boundary_values,
 					      component_mask);
     
@@ -2292,7 +2304,7 @@ FSI_ALE_Problem<dim>::set_initial_bc (const double time)
     
     VectorTools::interpolate_boundary_values (dof_handler,
 					      1,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
 					      boundary_values,
 					      component_mask);
     
@@ -2319,30 +2331,30 @@ FSI_ALE_Problem<dim>::set_newton_bc ()
    
     VectorTools::interpolate_boundary_values (dof_handler,
 					      0,
-					      ZeroFunction<dim>(dim+dim+1),                                             
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),                                             
 					      constraints,
 					      component_mask); 
     component_mask[dim] = false; // ux
     VectorTools::interpolate_boundary_values (dof_handler,
                                               2,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
                                               constraints,
                                               component_mask);
     
     VectorTools::interpolate_boundary_values (dof_handler,
                                               3,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
                                               constraints,
                                               component_mask);
     component_mask[dim] = true; // ux
     VectorTools::interpolate_boundary_values (dof_handler,
                                               80,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
                                               constraints,
                                               component_mask);
     VectorTools::interpolate_boundary_values (dof_handler,
 					      81,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
 					      constraints,
 					      component_mask);       
     component_mask[0] = false;
@@ -2350,7 +2362,7 @@ FSI_ALE_Problem<dim>::set_newton_bc ()
     
     VectorTools::interpolate_boundary_values (dof_handler,
 					      1,
-					      ZeroFunction<dim>(dim+dim+1),  
+					      dealii::Functions::ZeroFunction<dim>(dim+dim+1),  
 					      constraints,
 					      component_mask);
 }  
@@ -2362,7 +2374,7 @@ template <int dim>
 void 
 FSI_ALE_Problem<dim>::solve () 
 {
-  timer.enter_section("Solve linear system.");
+  TimerOutput::Scope t(timer, "Solve linear system.");
   Vector<double> sol, rhs;    
   sol = newton_update;    
   rhs = system_rhs;
@@ -2376,7 +2388,6 @@ FSI_ALE_Problem<dim>::solve ()
   newton_update = sol;
   
   constraints.distribute (newton_update);
-  timer.exit_section();
 }
 
 // This is the Newton iteration with simple linesearch backtracking 
@@ -2438,8 +2449,10 @@ void FSI_ALE_Problem<dim>::newton_iteration (const double time)
   
       if (newton_residuum/old_newton_residuum > nonlinear_rho)
 	{
-	  assemble_system_matrix ();
-	  A_direct.initialize (system_matrix);
+	  	assemble_system_matrix ();
+	  	// A_direct.initialize (system_matrix); // mumps
+		A_direct.factorize(system_matrix);    	// umfpack 
+
 	}
 
       // Solve Ax = b
@@ -2473,7 +2486,7 @@ void FSI_ALE_Problem<dim>::newton_iteration (const double time)
       else 
 	std::cout << " " << '\t' ;
       std::cout << line_search_step  << '\t' 
-		<< std::scientific << timer_newton ()
+		<< std::scientific << timer_newton.cpu_time ()
 		<< std::endl;
 
 
@@ -2587,7 +2600,7 @@ void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor()
        // equations are defined here.
        for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
 	 if (cell->face(face)->at_boundary() && 
-	     cell->face(face)->boundary_indicator()==80)
+	     cell->face(face)->boundary_id()==80) // boundary_id boundary_indicator
 	   {
 	     fe_face_values.reinit (cell, face);
 	     fe_face_values.get_function_values (solution, face_solution_values);
@@ -2644,7 +2657,7 @@ void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor()
 	   for (unsigned int face=0; face<GeometryInfo<dim>::faces_per_cell; ++face)
 	     if (cell->neighbor_index(face) != -1)	       
 	       if (cell->material_id() !=  cell->neighbor(face)->material_id() &&
-		   cell->face(face)->boundary_indicator()!=80)
+		   cell->face(face)->boundary_id()!=80) // boundary_id boundary_indicator
 		 {
 		   
 		   fe_face_values.reinit (cell, face);
@@ -2711,7 +2724,7 @@ void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain()
 				update_values |
 				update_gradients |
 				update_JxW_values |
-				update_q_points);
+				update_quadrature_points);
 
    const unsigned int dofs_per_cell = fe.dofs_per_cell;
    const unsigned int n_q_points    = quadrature_formula.size();
@@ -2846,25 +2859,25 @@ void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain()
 
    VectorTools::interpolate_boundary_values (dof_handler,
        0,
-       ZeroFunction<dim>(dim+dim+1),
+       dealii::Functions::ZeroFunction<dim>(dim+dim+1),
        boundary_values,
        component_mask);
 
    VectorTools::interpolate_boundary_values (dof_handler,
        1,
-       ZeroFunction<dim>(dim+dim+1),
+       dealii::Functions::ZeroFunction<dim>(dim+dim+1),
        boundary_values,
        component_mask);
 
    VectorTools::interpolate_boundary_values (dof_handler,
        2,
-       ZeroFunction<dim>(dim+dim+1),
+       dealii::Functions::ZeroFunction<dim>(dim+dim+1),
        boundary_values,
        component_mask);
 
    VectorTools::interpolate_boundary_values (dof_handler,
        81,
-       ZeroFunction<dim>(dim+dim+1),
+       dealii::Functions::ZeroFunction<dim>(dim+dim+1),
        boundary_values,
        component_mask);
 
@@ -2897,7 +2910,7 @@ void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain_structure()
 				update_values |
 				update_gradients |
 				update_JxW_values |
-				update_q_points);
+				update_quadrature_points);
 
    const unsigned int dofs_per_cell = fe.dofs_per_cell;
    const unsigned int n_q_points    = quadrature_formula.size();
@@ -3020,26 +3033,26 @@ void FSI_ALE_Problem<dim>::compute_drag_lift_fsi_fluid_tensor_domain_structure()
 
    VectorTools::interpolate_boundary_values (dof_handler,
 					     80,
-					     ZeroFunction<dim>(dim+dim+1),
+					     dealii::Functions::ZeroFunction<dim>(dim+dim+1),
 					     boundary_values,
 					     component_mask);
 
 
    VectorTools::interpolate_boundary_values (dof_handler,
        0,
-       ZeroFunction<dim>(dim+dim+1),
+       dealii::Functions::ZeroFunction<dim>(dim+dim+1),
        boundary_values,
        component_mask);
 
    VectorTools::interpolate_boundary_values (dof_handler,
        1,
-       ZeroFunction<dim>(dim+dim+1),
+       dealii::Functions::ZeroFunction<dim>(dim+dim+1),
        boundary_values,
        component_mask);
 
    VectorTools::interpolate_boundary_values (dof_handler,
        2,
-       ZeroFunction<dim>(dim+dim+1),
+       dealii::Functions::ZeroFunction<dim>(dim+dim+1),
        boundary_values,
        component_mask);
 

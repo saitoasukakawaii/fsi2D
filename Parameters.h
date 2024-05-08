@@ -160,7 +160,7 @@ namespace Parameters
       prm.enter_subsection("Timestepping schemes & timestep & max_no_timesteps");
       {
         prm.declare_entry("time_stepping_scheme", "BE",
-                        Patterns::Selection("BE|CN|CN_Shifted"),
+                        Patterns::Selection("BE|CN|CN_shifted"),
                         "stepping scheme");
 
         prm.declare_entry("timestep", "1.0",
@@ -261,7 +261,8 @@ namespace Parameters
     {
       ParameterHandler prm;
       declare_parameters(prm);
-      prm.read_input(input_file); // 8.2.1 : read_input; 9.3.0 : parse_input
+      // prm.read_input(input_file); // 8.2.1 : read_input (<8.5.0); 9.3.0 : parse_input (>=9.0.0)
+      prm.parse_input(input_file);
       parse_parameters(prm);
     }
 

@@ -9,7 +9,7 @@ subsection Global
   set degree = 2
 
   # uniform mesh refinement
-  set no_of_refinements = 1
+  set no_of_refinements = 2
 
   # mesh file name
   set mesh_file = fsi.inp
@@ -18,7 +18,7 @@ end
 subsection inflow_velocity_parameter
   # inlet velocity 
   # FSI 1: 0.2; FSI 2: 1.0; FSI 3: 2.0;
-  set inflow_velocity = 0.2
+  set inflow_velocity = 2.0
 end
 
 subsection Physical constants
@@ -31,7 +31,7 @@ subsection Physical constants
   set density_structure = 1.0e+3
 
   # FSI 1 & 2: 0.5e+6; FSI 3: 2.0e+6
-  set lame_coefficient_mu = 0.5e+6
+  set lame_coefficient_mu = 2.0e+6
   set poisson_ratio_nu    = 0.4
   set force_structure_x   = 0.0
   set force_structure_y   = 0.0
@@ -43,17 +43,17 @@ end
 subsection Timestepping schemes & timestep & max_no_timesteps
   # Timestepping schemes
   # FSI 1 BE; FSI 2&3 CN or CN_shifted
-  set time_stepping_scheme = BE
+  set time_stepping_scheme = CN_shifted
 
   # FSI 1: 1.0 (quasi-stationary);
   # FSI 2: <= 1.0e-2 (non-stationary);
   # FSI 3: <= 1.0e-3 (non-stationary)
-  set timestep = 1.0
+  set timestep = 1.0e-3
 
   # FSI 1: 25 , T= 25   (timestep == 1.0);
   # FSI 2: 1500, T= 15  (timestep == 1.0e-2);
   # FSI 3: 10000, T= 10 (timestep == 1.0e-3)
-  set max_no_timesteps = 25
+  set max_no_timesteps = 10
 end
 
 subsection PhysicalGroup
