@@ -1,3 +1,4 @@
+#include <cmath>
 using namespace dealii;
 // First, we define tensors for solution variables
 // v (velocity), u (displacement), p (pressure).
@@ -304,23 +305,6 @@ template <int dim>
    }
 
 
- template <int dim> 
- inline
- double
- get_tr_C_LinU (unsigned int q, 
-		 const std::vector<std::vector<Tensor<1,dim> > > old_solution_grads,
-		 const Tensor<2,dim> phi_i_grads_u)	    
-{
-  return ((1 + old_solution_grads[q][dim][0]) *
-	  phi_i_grads_u[0][0] + 
-	  old_solution_grads[q][dim][1] *
-	  phi_i_grads_u[0][1] +
-	  (1 + old_solution_grads[q][dim+1][1]) *
-	  phi_i_grads_u[1][1] + 
-	  old_solution_grads[q][dim+1][0] *
-	  phi_i_grads_u[1][0]);
-}
-
  
 }
 
@@ -446,6 +430,22 @@ get_Incompressibility_ALE_LinAll (const Tensor<2,dim> phi_i_grads_v,
 }
 
 
+template <int dim> 
+inline
+Tensor<1,dim>
+get_gradP_ALE_LinAll (const double J, const Tensor<1,dim> grad_P, 
+          const Tensor<1,dim> grad_P_LinP, 
+          const Tensor<2,dim> F_Inverse,
+				  const Tensor<2,dim> F_Inverse_T,
+				  const Tensor<2,dim> F_Inverse_LinU,
+				  const Tensor<2,dim> J_F_Inverse_T_LinU)
+{
+  return ( 
+    J * ( grad_P_LinP * F_Inverse + grad_P * F_Inverse_LinU ) * F_Inverse_T 
+  + ( grad_P * F_Inverse ) * J_F_Inverse_T_LinU
+  );
+}	
+
   template <int dim> 
   inline
   Tensor<1,dim> 
@@ -548,6 +548,8 @@ get_accelaration_term_LinAll (const Tensor<1,dim> phi_i_v,
 }
 
 
+
+
 }
 
 
@@ -555,6 +557,91 @@ get_accelaration_term_LinAll (const Tensor<1,dim> phi_i_v,
 // constitutive relations for the solid equations.
 namespace Structure_Terms_in_ALE
 {
+
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_C (const Tensor<2,dim> F_T,
+	 const Tensor<2,dim> F)
+  {    
+    return F_T * F;
+  }
+
+  template <int dim> 
+  inline
+  double
+  get_tr_C (const Tensor<2,dim> C)
+  {     
+    return trace (C);
+  }
+
+  template <int dim> 
+  inline
+  double
+  get_tr_C_LinU (unsigned int q, 
+		 const std::vector<std::vector<Tensor<1,dim> > > old_solution_grads,
+		 const Tensor<2,dim> phi_i_grads_u)	    
+  {
+    return 2*((1 + old_solution_grads[q][dim][0]) *
+	    phi_i_grads_u[0][0] + 
+	    old_solution_grads[q][dim][1] *
+	    phi_i_grads_u[0][1] +
+	    (1 + old_solution_grads[q][dim+1][1]) *
+	    phi_i_grads_u[1][1] + 
+	    old_solution_grads[q][dim+1][0] *
+	    phi_i_grads_u[1][0]); 
+  }
+
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_C_Inverse (const Tensor<2,dim>  F_Inverse,
+		             const Tensor<2,dim>  F_Inverse_T)
+  {     
+    return F_Inverse * F_Inverse_T;
+  }
+
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_1st_PK_NH(const double mu_s,
+                const double J,
+                const double trC,
+                const Tensor<2,dim> F,
+                const Tensor<2,dim> F_Inverse_T)
+  {     
+    return mu_s*std::pow(J,-2/3)*(F-1/3*trC*F_Inverse_T);
+  }
+
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_1st_PK_NH_LinU(const double mu_s,
+                const double J,
+                const double J_LinU,
+                const double trC,
+                const double trC_LinU,
+                const Tensor<2,dim> F,
+                const Tensor<2,dim> F_LinU,
+                const Tensor<2,dim> F_Inverse_T,
+                const Tensor<2,dim> F_Inverse_T_LinU)
+  {     
+    return -2/3*mu_s*std::pow(J,-5/3)*J_LinU*(F-1/3*trC*F_Inverse_T)
+           +mu_s*std::pow(J,-2/3)*(F_LinU-1/3*trC_LinU*F_Inverse_T-1/3*trC*F_Inverse_T_LinU);
+  }
+
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_2nd_PK_NH(const double mu_s,
+                const double J,
+                const double trC,
+                const Tensor<2,dim> Identity,
+                const Tensor<2,dim> C_Inverse)
+  {     
+    return mu_s*std::pow(J,-2/3)*(Identity-1/3*trC*C_Inverse);
+  }
+
   // Green-Lagrange strain tensor
   template <int dim> 
   inline
@@ -589,6 +676,92 @@ namespace Structure_Terms_in_ALE
 	    phi_i_grads_u[1][1] + 
 	    old_solution_grads[q][dim+1][0] *
 	    phi_i_grads_u[1][0]); 
+  }
+
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_1st_PK(const Tensor<2,dim>  F,
+		         const Tensor<2,dim>  2st_PK)
+  {     
+    return F * 2st_PK;
+  }
+
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_u_sym(unsigned int q, 
+		 const std::vector<std::vector<Tensor<1,dim> > > old_solution_grads)
+  {   
+    Tensor<2,dim> tmp; 
+    for(size_t i=0;i<dim;++i)
+    {
+      for(size_t j=0;j<dim;++j)
+      {
+        tmp[i][j] = 0.5*(old_solution_grads[q][dim+i][j]+old_solution_grads[q][dim+j][i]);
+      }
+    }
+    
+    return tmp;
+  }
+
+  template <int dim> 
+  inline
+  double
+  get_trU(unsigned int q, 
+		 const std::vector<std::vector<Tensor<1,dim> > > old_solution_grads)
+  {   
+    double tmp; 
+    for(size_t i=0;i<dim;++i)
+    {
+      tmp += old_solution_grads[q][dim+i][i];
+    }
+    
+    return tmp;
+  }
+  template <int dim> 
+  inline
+  Tensor<2,dim> 
+  get_u_sym_LinU(const Tensor<2,dim> phi_i_grads_u)
+  {   
+    Tensor<2,dim> tmp; 
+    for(size_t i=0;i<dim;++i)
+    {
+      for(size_t j=0;j<dim;++j)
+      {
+        tmp[i][j] = 0.5*(phi_i_grads_u[i][j]+phi_i_grads_u[j][i]);
+      }
+    }
+    
+    return tmp;
+  }
+
+  template <int dim> 
+  inline
+  double
+  get_trU_LinU(const Tensor<2,dim> phi_i_grads_u)
+  {   
+    double tmp; 
+    for(size_t i=0;i<dim;++i)
+    {
+      tmp += phi_i_grads_u[i][i];
+    }
+    
+    return tmp;
+  }
+
+  template <int dim> 
+  inline
+  Tensor<1,dim> 
+  get_solidV_term_LinAll (const Tensor<1,dim> phi_i_u,
+              const Tensor<1,dim> u,
+              const Tensor<1,dim> old_timestep_u,
+              const double J_LinU,
+              const double J,
+              const double old_timestep_J,
+              const double density)
+  {   
+    return density/2.0 * (J_LinU * (u - old_timestep_u) + (J + old_timestep_J) * phi_i_u);
   }
   
 }
