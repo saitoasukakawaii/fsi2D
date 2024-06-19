@@ -1044,7 +1044,7 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 						convection_fluid_LinAll_short * phi_i_v[j] - 					      
 						convection_fluid_u_LinAll_short * phi_i_v[j] +
 						convection_fluid_u_old_LinAll_short * phi_i_v[j] +
-						timestep * scalar_product(stress_fluid_ALE_1st_term_LinAll, phi_i_grads_v[j]) +
+						timestep * theta * scalar_product(stress_fluid_ALE_1st_term_LinAll, phi_i_grads_v[j]) +
 						timestep * theta *
 						scalar_product(stress_fluid_ALE_2nd_term_LinAll, phi_i_grads_v[j]) 					 
 						) * scratch_data.fe_values.JxW(q);
@@ -1196,12 +1196,21 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 	      // It is here the same as already shown for the fluid equations.
 	      // First, we prepare things coming from the previous Newton
 	      // iteration...
+		  const Tensor<2,dim> pI = ALE_Transformations		
+		::get_pI<dim> (q, old_solution_values);
+
 	      const Tensor<2,dim> F = ALE_Transformations
 		::get_F<dim> (q, old_solution_grads);
 	      
 	      const Tensor<2,dim> F_T = ALE_Transformations
 		::get_F_T<dim> (F);
-	      
+
+		  const Tensor<2,dim> F_Inverse = ALE_Transformations
+		::get_F_Inverse<dim> (F);
+
+		const Tensor<2,dim> F_Inverse_T = ALE_Transformations
+		::get_F_Inverse_T<dim> (F_Inverse);
+
 		  const double J = ALE_Transformations
 		::get_J<dim> (F);
 
@@ -1216,6 +1225,12 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 	      
 	      const double tr_E = Structure_Terms_in_ALE
 		::get_tr_E<dim> (E);
+
+		  const Tensor<2,dim> C = Structure_Terms_in_ALE 
+		::get_C<dim> (F_T, F);
+
+		  const double tr_C = Structure_Terms_in_ALE
+		::get_tr_C<dim> (C);
 
 	      const double solid_pressure_scalar = old_solution_values[q](dim+dim);
           const double old_timestep_solid_pressure_scalar = old_timestep_solution_values[q](dim+dim);
@@ -1255,6 +1270,17 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 		  const double J_LinU = ALE_Transformations		  
 		    ::get_J_LinU<dim> (q, old_solution_grads, phi_i_grads_u[i]); 
 
+		  const Tensor<2,dim> F_Inverse_LinU = ALE_Transformations
+		    ::get_F_Inverse_LinU (phi_i_grads_u[i], J, J_LinU, q, old_solution_grads);
+
+		  const Tensor<2,dim> F_Inverse_T_LinU = transpose(F_Inverse_LinU);
+
+		  const Tensor<2,dim> pI_LinP = ALE_Transformations
+		  	::get_pI_LinP<dim> (phi_i_p[i]);
+
+   		  const Tensor<2,dim> J_F_Inverse_T_LinU = ALE_Transformations
+		    ::get_J_F_Inverse_T_LinU (phi_i_grads_u[i]);
+
 		  const double incompressibility_ALE_LinAll = NSE_in_ALE
 		    ::get_Incompressibility_ALE_LinAll<dim> 
 		    (phi_i_grads_v[i], phi_i_grads_u[i], q, old_solution_grads); 
@@ -1264,17 +1290,23 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 		  
 		  const double tr_E_LinU = Structure_Terms_in_ALE
 		    ::get_tr_E_LinU<dim> (q,old_solution_grads, phi_i_grads_u[i]);
-		  
-		       
+
+		  const double tr_C_LinU = Structure_Terms_in_ALE
+		    ::get_tr_C_LinU<dim> (q,old_solution_grads, phi_i_grads_u[i]);
+
 		  // STVK
 		  // Piola-kirchhoff stress structure STVK linearized in all directions 		  
 		//   Tensor<2,dim> piola_kirchhoff_stress_structure_STVK_LinALL;
 		//   piola_kirchhoff_stress_structure_STVK_LinALL = lame_coefficient_lambda * 
 		//     (F_LinU * tr_E * Identity + F * tr_E_LinU * Identity) 
 		//     + 2 * lame_coefficient_mu * (F_LinU * E + F * E_LinU);
-		Tensor<2,dim> 1st_PK_NH_LinU;
+		const Tensor<2,dim>  stress_1st_term_LinAll = NSE_in_ALE			
+		    ::get_stress_fluid_ALE_1st_term_LinAll<dim> 
+		    (pI, F_Inverse_T, J_F_Inverse_T_LinU, pI_LinP, J);
+
+		const Tensor<2,dim> 1st_PK_NH_LinU;
 		1st_PK_NH_LinU = Structure_Terms_in_ALE::get_1st_PK_NH_LinU(lame_coefficient_mu,
-                									J, J_LinU, trC, trC_LinU,
+                									J, J_LinU, tr_C, tr_C_LinU,
 													F, F_LinU, F_Inverse_T, F_Inverse_T_LinU);
 
 
@@ -1288,9 +1320,10 @@ local_assemble_system_matrix (const typename DoFHandler<dim>::active_cell_iterat
 		      const unsigned int comp_j = fe.system_to_component_index(j).first; 
 		      if (comp_j == 0 || comp_j == 1)
 			{
-			  copy_data.cell_matrix(j,i) += (0.5*dJrho*(v - old_timestep_v)* phi_i_v[j]+0.5*(J*density_structure_new+old_timestep_J*old_timestep_density_structure_new)*phi_i_v[i] * phi_i_v[j] +   						   
-						timestep * theta * scalar_product(1st_PK_NH_LinU, 
-										  phi_i_grads_v[j]) 
+			  copy_data.cell_matrix(j,i) += (
+						0.5*dJrho*(v - old_timestep_v)* phi_i_v[j]+0.5*(J*density_structure_new+old_timestep_J*old_timestep_density_structure_new)*phi_i_v[i] * phi_i_v[j] +   						   
+						timestep * theta * scalar_product(1st_PK_NH_LinU, phi_i_grads_v[j]) +
+						timestep * theta * scalar_product(stress_1st_term_LinAll, phi_i_grads_v[j])
 						) * scratch_data.fe_values.JxW(q);      	
 			}		     
 		      else if (comp_j == 2 || comp_j == 3)
@@ -2001,7 +2034,7 @@ local_assemble_system_rhs (const typename DoFHandler<dim>::active_cell_iterator 
 		  solid_pressure = (-solid_pressure_scalar * Identity * J * F_Inverse_T);
 		  Tensor<2,dim> old_timestep_solid_pressure;
 		  old_timestep_solid_pressure.clear();
-		  solid_pressure = (-old_timestep_solid_pressure * Identity * old_timestep_J * old_timestep_F_Inverse_T);
+		  old_timestep_solid_pressure = (-old_timestep_solid_pressure_scalar * Identity * old_timestep_J * old_timestep_F_Inverse_T);
 
           const double betaTheta = get_betaTheta_ST91(solid_bulk, solid_pressure_scalar);
 		  const double old_timestep_betaTheta = get_betaTheta_ST91(solid_bulk, old_timestep_solid_pressure_scalar);
